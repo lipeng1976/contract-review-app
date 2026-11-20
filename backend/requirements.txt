@@ -1,0 +1,7 @@
+# Contract Review App dependencies
+fastapi>=0.110
+uvicorn>=0.27
+bcrypt>=4.0
+pyjwt>=2.8
+python-multipart>=0.0.9
+psycopg[binary]>=3.1

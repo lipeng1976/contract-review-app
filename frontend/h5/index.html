@@ -1,0 +1,2172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#2f6fed">
+<title data-i18n="app_title">合同审查</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#e8eaee; --ink:#1d2430; --muted:#6b7482;
+          --blue:#2f6fed; --red:#c0392b; --green:#1a7f5a; --amber:#b8860b; }
+  * { box-sizing:border-box; }
+  /* App shell: header + scrollable body + bottom bar, all inside the *visible*
+     viewport. Body itself never scrolls, so the tab bar can never be pushed
+     half off-screen by long content or by a mobile URL/tool bar.
+     Heights cascade: 100vh (ancient) -> 100dvh (Chrome 108+) -> --app-h, which
+     JS measures from window.innerHeight. The last one is the one that actually
+     saves us on WebViews/browsers that have no dvh: there 100vh is the *large*
+     viewport, so the address bar covers the bottom ~50px and the tab labels get
+     cut in half. */
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+         font-size:15px; line-height:1.55; -webkit-text-size-adjust:100%;
+         display:flex; flex-direction:column; overflow:hidden;
+         height:100vh; height:100dvh; height:var(--app-h, 100dvh); }
+  .top { position:relative; flex:0 0 auto; z-index:10; background:#fff; border-bottom:1px solid var(--line);
+         padding:calc(env(safe-area-inset-top) + 12px) 16px 12px; display:flex; align-items:center; gap:10px; }
+  .top h1 { font-size:17px; margin:0; font-weight:650; flex:1; }
+  .top .who { font-size:12px; color:var(--muted); }
+  .lang-btn { flex:0 0 auto; padding:5px 10px; border-radius:999px; border:1px solid var(--line);
+              background:#f4f6fb; color:var(--blue); font-size:12px; font-weight:650; cursor:pointer; }
+  button, .btn { font:inherit; cursor:pointer; border:none; border-radius:10px; padding:10px 14px;
+                 background:var(--blue); color:#fff; font-size:14px; }
+  button.ghost { background:#eef2fb; color:var(--blue); }
+  button.warn { background:#fdecea; color:var(--red); }
+  button.sm { padding:6px 10px; font-size:13px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .wrap { flex:1 1 auto; min-height:0; width:100%; max-width:720px; margin:0 auto; padding:14px;
+          overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:12px; }
+  .card h2 { font-size:16px; margin:0 0 12px; font-weight:650; }
+  .card h3 { font-size:14px; margin:16px 0 8px; font-weight:650; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 5px; }
+  input[type=text], input[type=tel], input[type=password], input[type=search], input[type=file], select, textarea {
+    width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px;
+    font:inherit; background:#fff; color:var(--ink); }
+  input[type=search] { margin-bottom:8px; }
+  input:focus, select:focus, textarea:focus { outline:2px solid #cfe0ff; border-color:var(--blue); }
+  .remember-row { display:flex; align-items:center; gap:7px; margin:10px 0 0; font-size:13px; color:var(--muted); cursor:pointer; }
+  .remember-row input[type=checkbox] { width:auto; margin:0; accent-color:var(--blue); cursor:pointer; }
+  .stack { display:grid; gap:10px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; margin:1px 2px 1px 0;
+           line-height:18px; }
+  /* 判定徽章配色与 PDF 报告的 BADGE_COLOR 完全一致：
+     通过（已提供 / 已核对）= 浅绿底 + 深绿字；其余按报告同色 */
+  .b-checked, .b-present { background:#E3F4E8; color:#1E8A5A; }
+  .b-action  { background:#FCE6D8; color:#B9532B; }
+  .b-unclear { background:#FBEED7; color:#A97E13; }
+  .b-missing { background:#FBE4E4; color:#C0392B; }
+  .b-awaiting{ background:#FBE6D6; color:#C87A2D; }
+  .b-na      { background:#EDF0F2; color:#6B7280; }
+  .b-queue   { background:#eef2fb; color:var(--blue); }
+  .b-role    { background:#efe8fb; color:#6b3fa0; }
+  .b-perm    { background:#e8f0fe; color:#2f6fed; font-size:11px; }
+  /* 任务态三色：活着在跑 / 需要人管 / 真的失败 */
+  .b-live    { background:#e6f4ee; color:var(--green); animation:pulse 1.8s ease-in-out infinite; }
+  .b-warn    { background:#fff4e5; color:#b54708; }
+  .b-fail    { background:#fdecea; color:#b42318; }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.62 } }
+  .tabs { display:flex; gap:6px; overflow-x:auto; padding-bottom:6px; margin:0 -14px 10px; padding-left:14px; }
+  .tab { flex:0 0 auto; padding:7px 12px; border-radius:999px; background:#e9ecf1; font-size:13px; color:#444; }
+  .tab.on { background:var(--blue); color:#fff; }
+  /* 每条核查项独立浅色方框：与 PDF 里一行一条目的观感对齐 */
+  .item { background:#FAFBFD; border:1px solid #E9EDF2; border-radius:12px;
+          padding:11px 13px; margin-bottom:10px; }
+  .item:last-child { margin-bottom:0; }
+  .item .code { font-weight:700; color:var(--blue); font-size:13px; margin-right:6px; }
+  /* 条目标题独占一行，不因右侧徽章挤压而折行 */
+  .item-head { font-size:14px; line-height:1.45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .item-badges { display:flex; align-items:center; margin-top:8px; }
+  .detail-addr { font-size:15px; font-weight:600; line-height:1.45; margin-top:8px; }
+  .badges { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+  /* 标题 / CONTENTS / Notes 三段之间用与卡片同色的浅色细线分隔 */
+  .item .txt { font-size:13.5px; color:#374151; line-height:1.58; word-break:break-word;
+               border-top:1px solid #E9EDF2; padding-top:10px; margin-top:10px; }
+  .item .txt p { margin:0 0 4px; }
+  .item .txt p:last-child { margin-bottom:0; }
+  .item .txt b, .item .txt strong { font-weight:700; color:#1F2A37; }
+  .pages { font-size:11px; color:var(--muted); border-top:1px solid #E9EDF2;
+           padding-top:9px; margin-top:10px; }
+  .nav { display:flex; gap:8px; margin-top:12px; }
+  .nav button { flex:1; }
+  /* Detail actions: keep labels on one line and wrap the row when crowded. */
+  .detail-nav { flex-wrap:wrap; }
+  .detail-nav button { flex:1 1 auto; white-space:nowrap; }
+  .danger { background:#fdecea !important; color:var(--red) !important; border-color:#f6c9c4 !important; }
+  .prog { margin-top:8px; }
+  .prog .bar { height:8px; border-radius:999px; background:#eef1f5; overflow:hidden; }
+  .prog .bar i { display:block; height:100%; background:var(--blue); width:0; transition:width .4s ease; }
+  .prog .lbl { font-size:12px; color:var(--muted); margin-top:5px; display:flex; justify-content:space-between; gap:8px; }
+  .errbox { background:#fdecea; border:1px solid #f6c9c4; color:#a0281e; border-radius:10px;
+            padding:9px 11px; font-size:12.5px; margin-top:8px; word-break:break-word; }
+  /* 任务态说明：需要人管（warn）/ 正常在等（ok），与真失败（errbox）区分开 */
+  .warnbox { background:#fff8ec; border:1px solid #f0d5a8; color:#8a5a12; border-radius:10px;
+             padding:9px 11px; font-size:12.5px; margin-top:8px; line-height:1.6; word-break:break-word; }
+  .okbox   { background:#eef7f2; border:1px solid #cbe6d9; color:#1d6b4f; border-radius:10px;
+             padding:9px 11px; font-size:12.5px; margin-top:8px; line-height:1.6; }
+  #toast { position:fixed; left:50%; bottom:calc(76px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#222c;
+           color:#fff; padding:9px 16px; border-radius:999px; font-size:13px; z-index:99; display:none;
+           max-width:90vw; text-align:center; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid #f1f2f4; font-size:14px; }
+  .kv:last-child { border-bottom:none; }
+  .kv .k { color:var(--muted); }
+  .kv .v { text-align:right; word-break:break-all; }
+  .hide { display:none !important; }
+  .empty { text-align:center; color:var(--muted); padding:32px 12px; }
+  .admin-bar { background:#fff8e6; border:1px solid #f0dfa8; }
+  .perm-checks { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  .perm-checks label { display:inline-flex; align-items:center; gap:4px; margin:0; padding:5px 8px;
+                       background:#eef2fb; border-radius:8px; font-size:12px; color:#334155; cursor:pointer; }
+  .perm-checks input { width:auto; }
+  .role-checks { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  .role-checks label { display:inline-flex; align-items:center; gap:4px; margin:0; padding:6px 10px;
+                       background:#f3eefb; border-radius:8px; font-size:13px; color:#4c2f78; cursor:pointer; }
+  .role-checks input { width:auto; }
+  hr.sep { border:none; border-top:1px solid #f0dfa8; margin:14px 0; }
+  /* bottom tab bar — a flex row of the shell, never absolute/fixed,
+     so it always sits exactly at the bottom of the visible viewport */
+  .bottom { flex:0 0 auto; z-index:20; background:#fff;
+            border-top:1px solid var(--line); display:flex; align-items:stretch;
+            padding-bottom:env(safe-area-inset-bottom); box-shadow:0 -2px 10px #00000008; }
+  .btab { flex:1 1 0; min-width:0; padding:7px 2px 7px; text-align:center; color:var(--muted);
+          font-size:11px; line-height:1.25; cursor:pointer; -webkit-tap-highlight-color:transparent;
+          white-space:nowrap; overflow:hidden; }
+  .btab .bi { display:block; font-size:17px; line-height:1.15; margin-bottom:1px; font-weight:600; }
+  .btab.on { color:var(--blue); }
+  .btab.on .bi { color:var(--blue); }
+  /* editing */
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; }
+  .grid2 > div { min-width:0; }
+  .editcard { background:#f7faff !important; border-color:#cfe0ff !important; }
+  .robox { background:#f3f4f6; border:1px dashed #d5d9e0; border-radius:10px; padding:10px 12px;
+           font-size:14px; color:#374151; word-break:break-word; }
+  .modal { position:fixed; inset:0; background:#0000006b; z-index:60; display:flex;
+           align-items:flex-end; justify-content:center; }
+  .modal-box { width:100%; max-width:720px; max-height:90vh; max-height:90dvh; overflow-y:auto; margin:0;
+               border-radius:16px 16px 0 0; box-shadow:0 -6px 24px #00000024;
+               padding-bottom:calc(16px + env(safe-area-inset-bottom)); }
+  .modal-box h2 { font-size:16px; margin:0; font-weight:650; }
+  @media (min-width:760px) { .modal { align-items:center; } .modal-box { border-radius:16px; } }
+  /* detail KPIs + in-contract search + follow-ups */
+  .kpirow { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .kpi { flex:1 1 88px; min-width:88px; background:#f7f8fb; border:1px solid var(--line);
+         border-radius:12px; padding:8px 10px; }
+  .kpi b { display:block; font-size:18px; line-height:1.2; font-weight:700; }
+  .kpi span { font-size:11px; color:var(--muted); }
+  .kpi.hot b { color:var(--red); }
+  .searchbox { display:flex; gap:8px; margin-top:12px; }
+  .searchbox input { flex:1; margin:0; }
+  .fu { border-left:3px solid var(--amber); background:#fffdf6; border-radius:0 12px 12px 0;
+        padding:10px 12px; margin-bottom:10px; }
+  .fu h4 { margin:0 0 4px; font-size:14px; font-weight:650; }
+  .fu ul { margin:4px 0 0; padding-left:18px; font-size:13px; color:#3b4350; }
+  .fu li { margin:2px 0; }
+  .fu .pgs { font-size:11px; color:var(--muted); margin-top:6px; }
+  mark { background:#ffe9a8; color:inherit; border-radius:3px; padding:0 1px; }
+  .auditrow { font-size:12px; color:var(--muted); padding:6px 0; border-bottom:1px dashed var(--line); }
+  .auditrow b { color:var(--ink); font-weight:600; }
+  .cfgbadge { background:#f7faff; border:1px solid #d9e6ff; border-radius:12px; padding:10px 12px; margin-bottom:10px; }
+  .cfgdline { font-size:12px; margin-top:4px; word-break:break-all; }
+  .cfgdline.muted { color:var(--muted); }
+</style>
+<script>
+/* 可见高度兜底：移动浏览器里 100vh = 地址栏收起后的“最大高度”，地址栏一露面就把
+   底部菜单切掉一半；dvh 在老 Chromium / 国产内核 / 卓易通 WebView 里又不认。
+   所以用实测 innerHeight 写进 --app-h（CSS 里 height:var(--app-h,100dvh) 兜着）。 */
+(function () {
+  var D = document.documentElement;
+  function fit() {
+    var h = window.innerHeight || (window.visualViewport && window.visualViewport.height) || 0;
+    if (h > 0) D.style.setProperty('--app-h', Math.round(h) + 'px');
+  }
+  fit();
+  window.addEventListener('resize', fit);
+  window.addEventListener('pageshow', fit);
+  window.addEventListener('orientationchange', function () { setTimeout(fit, 260); });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', fit);
+  document.addEventListener('DOMContentLoaded', fit);
+})();
+</script>
+</head>
+<body>
+<div class="top">
+  <h1 data-i18n="app_title">合同审查</h1>
+  <span class="who" id="who"></span>
+  <button class="lang-btn" id="langBtn" onclick="toggleLang()">EN</button>
+</div>
+<div class="wrap">
+
+  <!-- 登录 -->
+  <section id="loginView" class="card">
+    <h2 data-i18n="login_title">登录</h2>
+    <label data-i18n="account">账号</label><input type="text" id="loginAccount" autocomplete="username" data-i18n-ph="account_ph" placeholder="账号（不限手机号）">
+    <label data-i18n="password">密码</label><input type="password" id="loginPw" autocomplete="current-password" data-i18n-ph="pw_ph" placeholder="至少 8 位">
+    <label class="remember-row"><input type="checkbox" id="rememberPw"><span data-i18n="remember_pw">记住密码（下次自动填入）</span></label>
+    <div class="stack" style="margin-top:16px">
+      <button onclick="doLogin()" data-i18n="login_btn">登录</button>
+      <button class="ghost" onclick="show('regView')" data-i18n="go_register">注册新账号</button>
+    </div>
+    <!-- 只装在 APK 壳里出现：长按空白处虽也能改地址，但太隐蔽，这里给个看得见的入口 -->
+    <div class="muted hide" id="srvRow" style="margin-top:14px;font-size:12px;text-align:center">
+      <a href="javascript:void(0)" onclick="openServerConfig()" data-i18n="srv_change">修改服务器地址</a>
+      <span id="srvNow"></span>
+    </div>
+  </section>
+
+  <!-- 注册 -->
+  <section id="regView" class="card hide">
+    <h2 data-i18n="register_title">注册</h2>
+    <label data-i18n="display_name">姓名 / 单位</label><input type="text" id="regName" data-i18n-ph="optional" placeholder="选填">
+    <label data-i18n="account">账号</label><input type="text" id="regAccount" autocomplete="username" data-i18n-ph="account_ph" placeholder="账号（不限手机号）">
+    <label data-i18n="password">密码</label><input type="password" id="regPw" autocomplete="new-password" data-i18n-ph="pw_ph" placeholder="至少 8 位">
+    <label data-i18n="reg_role">申请角色</label>
+    <select id="regRole">
+      <option value="viewer" data-i18n="role_viewer">只读（仅查看）</option>
+      <option value="operator" data-i18n="role_operator">操作员（可上传分析）</option>
+    </select>
+    <div class="stack" style="margin-top:16px">
+      <button onclick="doRegister()" data-i18n="submit_register">提交注册</button>
+      <button class="ghost" onclick="show('loginView')" data-i18n="back_login">返回登录</button>
+    </div>
+    <p class="muted" style="margin-bottom:0" data-i18n="register_hint">注册后需管理员审批通过才能使用。</p>
+  </section>
+
+  <!-- 等待审批 / 被拒 -->
+  <section id="waitView" class="card hide">
+    <h2 id="waitTitle">等待审批</h2>
+    <p class="muted" id="waitDesc"></p>
+    <button class="ghost" onclick="doLogout()" data-i18n="logout">退出登录</button>
+  </section>
+
+  <!-- 主界面 -->
+  <div id="mainView" class="hide">
+
+    <!-- ===== Tab: 合同录入 ===== -->
+    <section id="tab-entry" class="tabpage hide">
+      <div id="noUploadBox" class="card hide"><div class="empty" data-i18n="no_upload_perm">当前角色无上传权限，请联系管理员。</div></div>
+      <div id="uploadWrap">
+        <section class="card">
+          <div class="row"><h2 style="margin:0" data-i18n="upload_title">上传合同</h2><span class="muted">PDF · ≤100MB</span></div>
+          <input type="file" id="fileInput" accept="application/pdf,.pdf" style="margin-top:10px">
+          <label data-i18n="vis_label" style="margin-top:10px">可见性</label>
+          <select id="uploadVis" style="width:100%;margin-top:4px">
+            <option value="shared" data-i18n="vis_shared">共享给团队（其他人可查看）</option>
+            <option value="private" data-i18n="vis_private">仅自己可见</option>
+          </select>
+          <p class="muted" style="margin:6px 0 0" data-i18n="vis_hint">上传后随时可在合同详情里切换。</p>
+          <button style="width:100%;margin-top:10px" id="uploadBtn" onclick="doUpload()" data-i18n="upload_btn">上传并排队分析</button>
+          <p class="muted" style="margin:8px 0 0" data-i18n="upload_hint">同一份原件重复上传会返回已有合同，不会重复建单。</p>
+        </section>
+      </div>
+    </section>
+
+    <!-- ===== Tab: 合同查询 ===== -->
+    <section id="tab-query" class="tabpage">
+      <section id="listCard" class="card">
+        <h2 data-i18n="my_contracts">我的合同</h2>
+        <input id="searchBox" type="search" autocomplete="off" oninput="onSearch()"
+               data-i18n-ph="search_ph" placeholder="搜索合同号 / 地址 / 产权人">
+        <div class="tabs" id="statusTabs">
+          <div class="tab on" data-st="" onclick="pickStatus(this)" data-i18n="filter_all">全部</div>
+          <div class="tab" data-st="queued" onclick="pickStatus(this)" data-i18n="filter_queued">待分析</div>
+          <div class="tab" data-st="completed" onclick="pickStatus(this)" data-i18n="filter_completed">已完成</div>
+          <div class="tab" data-st="failed" onclick="pickStatus(this)" data-i18n="filter_failed">失败</div>
+        </div>
+        <div id="contractList"><div class="empty" data-i18n="loading">加载中…</div></div>
+      </section>
+    </section>
+
+    <!-- ===== Tab: 归档合同（独立入口，普通查询看不到归档件） ===== -->
+    <section id="tab-archived" class="tabpage hide">
+      <section id="archivedCard" class="card">
+        <h2 data-i18n="archived_title" style="margin:0">归档合同</h2>
+        <input id="archiveSearchBox" type="search" autocomplete="off" oninput="onArchiveSearch()"
+               data-i18n-ph="search_ph" placeholder="搜索合同号 / 地址 / 产权人">
+        <div id="archivedList"><div class="empty" data-i18n="loading">加载中…</div></div>
+      </section>
+    </section>
+
+    <!-- 明细：合同查询 / 归档合同共用 -->
+    <section id="detailView" class="card hide">
+        <div class="row"><h2 id="detailTitle" style="margin:0">合同明细</h2>
+          <button class="ghost sm" onclick="closeDetail()" data-i18n="back">返回</button></div>
+        <div id="detailAddr" class="detail-addr"></div>
+        <div id="detailBadges" class="badges"></div>
+        <div id="visRow" class="row hide" style="margin-top:8px;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="muted" data-i18n="vis_label">可见性</span>
+          <span id="visBadge" class="badge b-role">—</span>
+          <a href="javascript:void(0)" id="visToggle" style="font-size:13px"></a>
+          <span id="visOwner" class="muted" style="font-size:12px"></span>
+        </div>
+        <div id="detailKpi" class="kpirow"></div>
+        <div id="detailJob" style="margin-top:10px"></div>
+        <div class="nav detail-nav">
+          <button class="ghost sm" id="dlOriginal" onclick="download('original')" data-i18n="dl_original">原件 PDF</button>
+          <button class="ghost sm" id="dlReport" onclick="download('report')" data-i18n="dl_report">报告 PDF</button>
+          <button class="ghost sm hide" id="dlEditedReport" onclick="download('edited-report')" data-i18n="dl_edited_report">修改后报告 PDF</button>
+          <button class="ghost sm" id="retryBtn" onclick="retryContract()" data-i18n="retry_analysis">重新分析</button>
+          <button class="ghost sm hide" id="archiveBtn" onclick="toggleArchive()" data-i18n="archive_contract">归档合同</button>
+          <button class="danger sm" id="delBtn" onclick="deleteContract()" data-i18n="delete_contract">删除合同</button>
+        </div>
+        <div class="tabs" id="sectionTabs" style="margin-top:12px"></div>
+
+        <!-- 详情标签：完整合同字段与修改记录，与 A–G 平级 -->
+        <div id="infoPanel" class="hide">
+          <div id="infoMeta" style="margin-top:10px"></div>
+          <button class="ghost sm hide" id="editContractBtn" onclick="toggleContractEdit()"
+                  style="width:100%;margin-top:10px" data-i18n="edit_contract">编辑合同信息</button>
+
+          <!-- 合同字段编辑（contract.edit） -->
+          <section id="contractEditCard" class="card editcard hide" style="margin-top:10px">
+            <div class="row"><h3 style="margin:0" data-i18n="edit_contract_h">修改合同信息</h3></div>
+            <p class="muted" id="editWarn" style="margin:6px 0 0"></p>
+            <div class="grid2">
+              <div style="grid-column:1 / -1">
+                <label data-i18n="fld_address">物业地址</label>
+                <input type="text" id="cfPropertyAddress">
+              </div>
+              <div><label data-i18n="fld_title_vol">产权卷号 Volume</label><input type="text" id="cfTitleVolume"></div>
+              <div><label data-i18n="fld_title_fol">产权册号 Folio</label><input type="text" id="cfTitleFolio"></div>
+              <div><label data-i18n="fld_lot">地块号 Lot</label><input type="text" id="cfLotNumber"></div>
+              <div><label data-i18n="fld_plan">规划图号 Plan</label><input type="text" id="cfPlanNumber"></div>
+              <div style="grid-column:1 / -1">
+                <label data-i18n="fld_owner">登记业主</label>
+                <input type="text" id="cfRegisteredOwner">
+              </div>
+              <div><label data-i18n="fld_area">土地面积（㎡）</label><input type="text" id="cfLandArea" inputmode="decimal"></div>
+              <div><label data-i18n="fld_council">市政费（$）</label><input type="text" id="cfCouncil" inputmode="decimal"></div>
+              <div><label data-i18n="fld_water">水费（$）</label><input type="text" id="cfWater" inputmode="decimal"></div>
+            </div>
+            <div class="nav">
+              <button onclick="saveContractFields()" data-i18n="save">保存</button>
+              <button class="ghost" onclick="toggleContractEdit(false)" data-i18n="cancel">取消</button>
+            </div>
+          </section>
+
+          <!-- 编辑历史（contract.edit） -->
+          <div id="auditBox" class="hide" style="margin-top:18px">
+            <div class="row"><h3 style="margin:0" data-i18n="audit_title">修改记录</h3>
+              <button class="ghost sm" onclick="toggleAudit()" id="auditToggle" data-i18n="show">展开</button></div>
+            <div id="auditList" class="hide"></div>
+          </div>
+        </div>
+
+        <!-- 核查清单标签 -->
+        <div id="itemsPanel" class="hide">
+          <div class="row" style="margin-top:6px">
+            <h2 style="margin:0;font-size:15px" data-i18n="checklist">核查清单 A–G</h2>
+            <button class="ghost sm hide" id="addItemBtn" onclick="openItemModal(null)" data-i18n="add_item">+ 新增条目</button>
+          </div>
+          <div class="searchbox">
+            <input type="search" id="itemSearch" oninput="onItemSearch()" data-i18n-ph="search_in_contract"
+                   placeholder="在本合同中搜索（条款号 / 条目 / 内容）">
+            <button class="ghost sm hide" id="searchClear" onclick="clearItemSearch()" data-i18n="clear">清除</button>
+          </div>
+          <div id="itemsBox"><div class="empty" data-i18n="loading">加载中…</div></div>
+        </div>
+    </section>
+
+    <!-- ===== Tab: 个人信息 ===== -->
+    <section id="tab-profile" class="tabpage hide">
+      <section class="card">
+        <h2 data-i18n="profile_title">个人信息</h2>
+        <div class="kv"><span class="k" data-i18n="profile_account">账号</span><span class="v" id="pfAccount">-</span></div>
+        <div class="kv"><span class="k" data-i18n="profile_name">姓名</span><span class="v" id="pfName">-</span></div>
+        <div class="kv"><span class="k" data-i18n="profile_status">状态</span><span class="v" id="pfStatus">-</span></div>
+        <div class="kv"><span class="k" data-i18n="profile_role">当前角色</span><span class="v" id="pfRoles">-</span></div>
+        <div style="margin-top:10px"><span class="muted" data-i18n="profile_perms">拥有权限</span><div id="pfPerms"></div></div>
+        <div class="nav"><button class="ghost sm" onclick="changePw()" data-i18n="change_pw">修改密码</button>
+          <button class="ghost sm" onclick="doLogout()" data-i18n="logout">退出登录</button></div>
+      </section>
+    </section>
+
+    <!-- ===== Tab: 用户鉴权（admin.users）===== -->
+    <section id="tab-users" class="tabpage hide">
+      <section class="card">
+        <h2 data-i18n="nav_users">用户鉴权</h2>
+        <div id="mgmtUsersBlock">
+          <h3><span data-i18n="pending_members">待审批成员</span> <span id="pendingCount" class="badge b-queue">0</span></h3>
+          <div id="pendingList"></div>
+
+          <hr class="sep">
+          <h3 data-i18n="all_users">全部用户与角色</h3>
+          <div id="allUserList"><div class="empty" data-i18n="loading">加载中…</div></div>
+          <div id="assignBox" class="hide" style="background:#fff;border-radius:10px;padding:10px;margin-top:8px">
+            <div class="row"><span><span data-i18n="assign_roles_title">分配角色</span> — <b id="assignWho"></b></span>
+              <button class="ghost sm" onclick="closeAssign()" data-i18n="cancel">取消</button></div>
+            <div class="role-checks" id="assignChecks"></div>
+            <button class="sm" onclick="saveUserRoles()" data-i18n="save_roles">保存角色</button>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ===== Tab: 角色配置（admin.roles）===== -->
+    <section id="tab-roles" class="tabpage hide">
+      <section class="card">
+        <h2 data-i18n="nav_roles">角色配置</h2>
+        <div id="mgmtRolesBlock">
+          <h3 data-i18n="role_mgmt">角色管理</h3>
+          <div id="rolesList"><div class="empty" data-i18n="loading">加载中…</div></div>
+          <button class="ghost sm" style="margin-top:8px" onclick="openRoleForm()" data-i18n="new_role">新建角色</button>
+          <div id="roleFormBox" class="hide" style="background:#fff;border-radius:10px;padding:10px;margin-top:8px">
+            <div class="row"><span id="roleFormTitle" data-i18n="new_role">新建角色</span>
+              <button class="ghost sm" onclick="closeRoleForm()" data-i18n="cancel">取消</button></div>
+            <label data-i18n="role_name">角色标识（英文小写）</label><input type="text" id="roleName" placeholder="e.g. auditor">
+            <label data-i18n="role_label_zh">中文名称</label><input type="text" id="roleLabelZh" placeholder="审计员">
+            <label data-i18n="role_label_en">English name</label><input type="text" id="roleLabelEn" placeholder="Auditor">
+            <label data-i18n="role_desc">说明</label><input type="text" id="roleDesc" placeholder="">
+            <label data-i18n="role_perms">权限点</label><div class="perm-checks" id="rolePermChecks"></div>
+            <button class="sm" onclick="saveRole()" data-i18n="save_role">保存角色</button>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ===== Tab: 系统设置（admin.llm / admin.audit）===== -->
+    <section id="tab-sys" class="tabpage hide">
+      <section class="card">
+        <h2 data-i18n="nav_sys">系统设置</h2>
+        <div id="mgmtLlmBlock">
+          <h3 data-i18n="llm_cfg_title">大模型接口设置</h3>
+          <p class="muted" style="margin:0 0 6px" data-i18n="llm_cfg_hint">保存后 Worker 立即生效，无需重启。</p>
+          <div id="cfgEffective" class="cfgbadge"></div>
+          <label data-i18n="llm_base_url">接口地址 Base URL</label>
+          <input type="text" id="cfgBaseUrl" placeholder="https://ark.cn-beijing.volces.com/api/v3">
+          <label data-i18n="llm_key">API Key</label>
+          <input type="password" id="cfgKey" placeholder="****">
+          <label data-i18n="llm_model">模型 Model</label>
+          <input type="text" id="cfgModel" placeholder="ep-2026xxxx">
+          <label data-i18n="llm_vision">视觉模型（可选，用于纯图片页）</label>
+          <input type="text" id="cfgVision" placeholder="">
+          <div class="row" style="gap:10px">
+            <div style="flex:1">
+              <label data-i18n="llm_timeout">单次超时（秒）</label>
+              <input type="number" id="cfgTimeout" min="5" max="600" step="5" placeholder="300" inputmode="numeric">
+            </div>
+            <div style="flex:1">
+              <label data-i18n="llm_max_tokens">最大输出 token</label>
+              <input type="number" id="cfgMaxTokens" min="256" max="65536" step="256" placeholder="8192" inputmode="numeric">
+            </div>
+          </div>
+          <p class="muted" style="margin:2px 0 0" data-i18n="llm_timeout_hint">超时太短会让整份报告直接失败；100 页以上的合同建议 300 秒以上。</p>
+          <div class="row" style="margin-top:10px">
+            <label style="margin:0"><input type="checkbox" id="cfgEnabled" checked style="width:auto"> <span data-i18n="llm_enabled">启用</span></label>
+            <span class="muted" id="cfgStatus"></span>
+          </div>
+          <div class="nav">
+            <button class="sm" onclick="saveLlmConfig()" data-i18n="save">保存</button>
+            <button class="ghost sm" onclick="testLlmConfig()" data-i18n="test_conn">测试连接</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 管理员没有「个人信息」页签，改密码入口放这里 -->
+      <section class="card">
+        <h2 data-i18n="account_card">账号</h2>
+        <div class="nav">
+          <button class="ghost sm" onclick="changePw()" data-i18n="change_pw">修改密码</button>
+          <button class="ghost sm" onclick="doLogout()" data-i18n="logout">退出登录</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- ===== 操作日志（独立页签，admin.audit） ===== -->
+    <section id="tab-log" class="tabpage hide">
+      <section class="card" id="auditCard">
+        <h2 style="margin:0" data-i18n="audit_page_title">操作日志</h2>
+        <p class="muted" style="margin:6px 0 10px" data-i18n="audit_page_hint">系统内所有写操作：上传、审批、编辑、删除。</p>
+        <div class="row" style="gap:8px">
+          <input type="search" id="auditSearch" oninput="onAuditSearch()" data-i18n-ph="audit_search_ph">
+          <select id="auditAction" class="sm" style="width:auto" onchange="loadAuditLog()"></select>
+        </div>
+        <div id="auditLogList" style="margin-top:10px"><div class="empty" data-i18n="loading">加载中…</div></div>
+      </section>
+    </section>
+
+    <!-- ===== 待办跟进（跨合同工作台） ===== -->
+    <section id="tab-more1" class="tabpage hide">
+      <div class="card">
+        <div class="row" style="align-items:baseline">
+          <h2 style="margin:0" data-i18n="fu_page_title">待办跟进</h2>
+          <span class="muted" id="fuSummary"></span>
+        </div>
+        <p class="muted" style="margin:6px 0 10px" data-i18n="fu_page_hint">汇总所有合同中需对方律师补充或澄清的事项。</p>
+        <input type="search" id="fuSearch" oninput="onFuSearch()" data-i18n-ph="fu_search_ph">
+        <div class="nav" style="margin-top:10px">
+          <button class="ghost sm" onclick="openFuDoc()" data-i18n="fu_make_doc">生成问题清单</button>
+        </div>
+        <div id="fuList" style="margin-top:10px"><div class="empty" data-i18n="loading">加载中…</div></div>
+      </div>
+    </section>
+
+    <!-- ===== 导出中心 ===== -->
+    <section id="tab-more2" class="tabpage hide">
+      <div class="card">
+        <h2 data-i18n="export_title">导出</h2>
+        <p class="muted" style="margin:6px 0 10px" data-i18n="export_hint">导出核查清单或跟进事项为 CSV，可直接用 Excel 打开。</p>
+        <label data-i18n="export_pick">选择合同</label>
+        <select id="exportContract" onchange="onExportPick()"></select>
+        <div class="nav" style="margin-top:10px">
+          <button class="sm" onclick="downloadExport('items')" data-i18n="export_items">核查清单 CSV</button>
+          <button class="ghost sm" onclick="downloadExport('followups')" data-i18n="export_fus">跟进事项 CSV</button>
+          <button class="ghost sm" onclick="previewExport('items')" data-i18n="export_preview">预览 / 复制</button>
+        </div>
+        <div id="exportNote" class="muted" style="margin-top:8px"></div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<!-- 底部菜单 -->
+<nav id="bottomBar" class="bottom hide">
+  <div class="btab on" data-tab="query" onclick="pickTab('query')"><span class="bi">▤</span><span data-i18n="tab_query">合同查询</span></div>
+  <div class="btab hide" data-tab="archived" onclick="pickTab('archived')"><span class="bi">▣</span><span data-i18n="tab_archived">归档合同</span></div>
+  <div class="btab" data-tab="entry" onclick="pickTab('entry')"><span class="bi">＋</span><span data-i18n="tab_entry">合同录入</span></div>
+  <div class="btab" data-tab="profile" onclick="pickTab('profile')"><span class="bi">◇</span><span data-i18n="tab_profile">个人信息</span></div>
+  <div class="btab" data-tab="more1" onclick="pickTab('more1')"><span class="bi">☑</span><span data-i18n="tab_more1">待办</span></div>
+  <div class="btab" data-tab="more2" onclick="pickTab('more2')"><span class="bi">⤓</span><span data-i18n="tab_more2">导出</span></div>
+  <div class="btab" data-tab="sys" onclick="pickTab('sys')"><span class="bi">⚙</span><span data-i18n="nav_sys">系统设置</span></div>
+  <div class="btab" data-tab="users" onclick="pickTab('users')"><span class="bi">☰</span><span data-i18n="nav_users">用户鉴权</span></div>
+  <div class="btab" data-tab="roles" onclick="pickTab('roles')"><span class="bi">⚑</span><span data-i18n="nav_roles">角色配置</span></div>
+  <div class="btab" data-tab="log" onclick="pickTab('log')"><span class="bi">≡</span><span data-i18n="nav_log">日志</span></div>
+</nav>
+<div id="toast"></div>
+
+<!-- 条目编辑 / 新增 -->
+<div id="itemModal" class="modal hide">
+  <div class="modal-box card">
+    <div class="row"><h2 id="itemModalTitle">编辑条目</h2>
+      <button class="ghost sm" onclick="closeItemModal()">✕</button></div>
+    <div id="itemModalBody"></div>
+    <div class="nav">
+      <button id="itemSaveBtn" onclick="saveItem()" data-i18n="save">保存</button>
+      <button class="ghost" onclick="closeItemModal()" data-i18n="cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 文本输出弹层：问题清单 / CSV 预览 -->
+<div id="docModal" class="modal hide">
+  <div class="modal-box card">
+    <div class="row">
+      <h2 id="docModalTitle">清单</h2>
+      <button class="ghost sm" onclick="closeDocModal()">✕</button>
+    </div>
+    <textarea id="docModalBody" rows="18" spellcheck="false"
+              style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5"></textarea>
+    <div class="nav">
+      <button onclick="copyDocModal()" data-i18n="copy">复制</button>
+      <button class="ghost" onclick="closeDocModal()" data-i18n="close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 通用确认 / 输入对话框：替代浏览器原生 confirm/prompt（安卓 WebView 原生弹窗会显示"网址为 xxx 的网页"标题） -->
+<div id="dlgModal" class="modal hide">
+  <div class="modal-box card" style="max-width:420px">
+    <h2 id="dlgTitle"></h2>
+    <div id="dlgMessage" class="muted" style="margin:8px 0 0;white-space:pre-wrap"></div>
+    <div id="dlgFields"></div>
+    <div class="nav" style="margin-top:16px">
+      <button id="dlgOk" onclick="dlgSubmit()">确定</button>
+      <button class="ghost" onclick="dlgCancel()" data-i18n="cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const I18N = {
+  zh: {
+    app_title:'合同审查', login_title:'登录', account:'账号', account_ph:'账号（不限手机号，可用字母/数字/邮箱名）',
+    srv_change:'修改服务器地址', srv_native_only:'只有 App 内才能修改服务器地址',
+    password:'密码', pw_ph:'至少 8 位', login_btn:'登录', go_register:'注册新账号',
+    remember_pw:'记住密码（下次自动填入）',
+    dlg_ok:'确定', dlg_confirm:'请确认', dlg_pw_required:'原密码和新密码都不能为空',
+    register_title:'注册', display_name:'姓名 / 单位', optional:'选填', submit_register:'提交注册',
+    back_login:'返回登录', register_hint:'注册后需管理员审批通过才能使用。',
+    reg_role:'申请角色',
+    logout:'退出登录', pending_members:'待审批成员', approve:'通过', reject:'拒绝', no_pending:'暂无待审批成员',
+    upload_title:'上传合同', upload_btn:'上传并排队分析', upload_hint:'同一份原件重复上传会返回已有合同，不会重复建单。',
+    vis_label:'可见性', vis_shared:'共享给团队（其他人可查看）', vis_private:'仅自己可见',
+    vis_hint:'上传后随时可在合同详情里切换。',
+    vis_shared_tag:'共享', vis_private_tag:'私有', vis_by:'上传者：',
+    vis_make_private:'改为仅自己可见', vis_make_shared:'改为共享',
+    toast_vis_shared:'已设为共享', toast_vis_private:'已设为仅自己可见',
+    my_contracts:'我的合同', filter_all:'全部', filter_queued:'待分析', filter_completed:'已完成',
+    loading:'加载中…', no_contracts:'暂无合同，先上传一份 PDF 吧', risk_items:'风险项',
+    no_address:'未填写地址', detail_title:'合同明细', back:'返回', dl_original:'原件 PDF', dl_report:'报告 PDF',
+    info_tab:'详情', archived_tag:'已归档', archive_contract:'归档合同', restore_contract:'取消归档',
+    archive_note:'合同已归档，仅供查阅，不能编辑或重新分析。',
+    confirm_archive:'归档后该合同将从普通查询中移除，且变为只读。确认归档？',
+    confirm_restore:'取消归档后合同会回到普通查询列表并恢复可编辑。确认继续？',
+    toast_archived:'合同已归档', toast_restored:'合同已取消归档',
+    dl_edited_report:'修改后报告 PDF', edited_tag:'已修改', kv_edited:'报告修改于',
+    checklist:'核查清单 A–G', no_items:'该章节暂无明细（报告可能尚未生成）',
+    wait_pending_title:'等待管理员审批', wait_rejected_title:'注册申请未通过', wait_suspended_title:'账号已停用',
+    wait_pending_desc:'你的账号已提交，需管理员审批后才能上传和查询合同。', wait_other_desc:'请联系管理员。',
+    kv_status:'状态', kv_property:'物业地址', kv_title:'产权', kv_lot:'地块',
+    kv_owner:'登记业主', kv_area:'面积', kv_council:'市政费', kv_water:'水费', kv_report:'报告状态',
+    report_none:'报告尚未生成', sqm:'㎡',
+    st_queued:'待分析', st_completed:'已完成', st_processing:'分析中', st_failed:'失败', st_awaiting_llm:'待配置模型',
+    st_queued_off:'待分析 · Worker 未运行', st_stalled:'分析中断',
+    job_queued:'排队中 · 等待分析服务领取',
+    job_queued_alive:'分析服务在线，通常几秒内开始领取。',
+    job_queued_off:'分析服务（Worker）当前没有运行，这个任务不会自动开始 —— 这不是失败，原件已安全保存。启动 worker 后会自动领取，不用重新上传。',
+    job_running:'正在分析',
+    job_sec_ago:'秒前', job_min_ago:'分钟前',
+    job_no_progress:'已', job_stalled:'分钟没有任何新进展，可能已中断（Worker 掉线或模型无响应）。',
+    job_worker_on:'分析服务在线', job_worker_off:'分析服务未运行',
+    retry_force:'强制重新分析',
+    toast_worker_off:'已上传，但没有分析服务在运行，任务会一直排队。',
+    v_Checked:'已核对', v_Action:'需跟进', v_Unclear:'不明确', v_NA:'不适用', v_FollowUp:'需后续跟进',
+    toast_login_fail:'登录失败：', toast_reg_ok:'注册成功，等待管理员审批', toast_reg_fail:'注册失败：',
+    toast_approved:'已通过', toast_rejected:'已拒绝', toast_need_file:'请先选择 PDF 文件',
+    toast_only_pdf:'只接受 PDF 文件', toast_uploading:'上传中…', toast_upload_ok:'上传成功：',
+    toast_dup:'已存在，返回原合同：', toast_upload_fail:'上传失败：',
+    err_InvalidAccount:'账号或密码错误', err_AccountExists:'账号已注册',
+    err_AccountFormat:'账号需 3–64 位：字母、数字、点、下划线或连字符',
+    err_PasswordShort:'密码至少 8 位', err_NotSignedIn:'未登录', err_BadSession:'会话无效或已过期',
+    err_AdminOnly:'需要管理员权限', err_NoPermission:'当前角色无此权限', err_OnlySuper:'仅超级管理员可操作',
+    err_SystemRole:'内置角色不可删除或改名', err_LastAdmin:'不能移除最后一个超级管理员', err_RoleExists:'角色标识已存在',
+    err_NotFound:'未找到合同', err_OnlyPdf:'仅接受 PDF 文件',
+    err_EmptyFile:'文件为空', err_BadSection:'章节必须是 A–G 之一', err_NoReport:'报告尚未生成',
+    sec_A:'A. 产权与权属信息', sec_B:'B. 规划、分区与政府', sec_C:'C. 费率、费用与支出',
+    sec_D:'D. 建筑、施工与状况', sec_E:'E. 租赁、占用与第三方权益',
+    sec_F:'F. 风险、诉讼与特别事项', sec_G:'G. 必备文件与附件',
+    llm_cfg_title:'大模型接口设置', llm_cfg_hint:'保存后 Worker 立即生效，无需重启。',
+    llm_timeout:'单次超时（秒）', llm_max_tokens:'最大输出 token',
+    llm_timeout_hint:'超时太短会让整份报告直接失败；100 页以上的合同建议 300 秒以上。',
+    llm_base_url:'接口地址 Base URL', llm_key:'API Key', llm_model:'模型 Model',
+    llm_vision:'视觉模型（可选，用于纯图片页）', llm_enabled:'启用',
+    save:'保存', test_conn:'测试连接',
+    cfg_saved:'配置已保存', cfg_save_fail:'保存失败：', cfg_testing:'测试中…',
+    cfg_ok:'连接成功', cfg_fail:'连接失败：', cfg_keep_key:'（已保存的 Key，留空则不修改）',
+    cfg_not_set:'尚未配置',
+    tab_entry:'合同录入', tab_query:'合同查询', tab_profile:'个人信息', tab_more1:'待办', tab_more2:'导出',
+    nav_sys:'系统设置', nav_users:'用户鉴权', nav_roles:'角色配置', nav_log:'日志', account_card:'账号',
+    tab_archived:'归档合同', archived_title:'归档合同',
+    fu_page_title:'待办跟进', fu_page_hint:'汇总所有合同中需对方律师补充或澄清的事项，点合同号可直接打开。',
+    fu_search_ph:'搜索事项 / 合同 / 地址', fu_make_doc:'生成问题清单', fu_empty:'暂无跟进事项',
+    fu_summary:'{n} 项 · {c} 份合同', fu_doc_title:'致对方律师的问题清单',
+    export_title:'导出', export_hint:'导出核查清单或跟进事项为 CSV，可直接用 Excel 打开。',
+    export_pick:'选择合同', export_items:'核查清单 CSV', export_fus:'跟进事项 CSV',
+    export_preview:'预览 / 复制', export_note:'浏览器会直接下载；手机上若未弹出下载，请用「预览 / 复制」把内容贴到别处。',
+    audit_page_title:'操作日志', audit_page_hint:'系统内所有写操作：上传、审批、编辑、删除。',
+    audit_search_ph:'搜索操作人 / 目标 / 动作', audit_all_actions:'全部动作', audit_empty:'暂无日志',
+    no_perm:'当前角色无访问权限',
+    copy:'复制', close:'关闭', copied:'已复制', copy_fail:'复制失败，请长按选择文本',
+    perm_admin_audit:'操作日志',
+    act_upload:'上传合同', act_login:'登录', act_register:'注册', act_edit_contract:'编辑合同',
+    act_edit_item:'修改条目', act_add_item:'新增条目', act_delete:'删除合同',
+    act_retry:'重新分析', act_approve_user:'审批通过', act_reject_user:'拒绝注册',
+    act_suspend_user:'停用账号', act_assign_roles:'分配角色', act_change_password:'修改密码',
+    act_create_role:'新建角色', act_update_role:'修改角色', act_delete_role:'删除角色',
+    act_update_llm_config:'修改大模型配置', act_delete_cleanup_warn:'清理残留文件失败',
+    coming_soon:'敬请期待', coming_soon_desc:'该功能正在规划中，敬请期待。',
+    profile_title:'个人信息', profile_account:'账号', profile_name:'姓名', profile_status:'状态',
+    profile_role:'当前角色', profile_perms:'拥有权限', change_pw:'修改密码',
+    mgmt_title:'系统管理', all_users:'全部用户与角色', assign_roles_title:'分配角色', cancel:'取消', save_roles:'保存角色', role_mgmt:'角色管理', new_role:'新建角色', edit_role:'编辑角色',
+    role_name:'角色标识（英文小写）', role_label_zh:'中文名称', role_label_en:'English name', role_desc:'说明',
+    role_perms:'权限点', save_role:'保存角色', builtin:'内置', members:'成员', confirm_del_role:'确认删除该角色？',
+    no_upload_perm:'当前角色无上传权限，请联系管理员。',
+    role_admin:'超级管理员', role_operator:'操作员', role_viewer:'只读',
+    perm_contract_view:'查看合同', perm_contract_upload:'上传并分析', perm_contract_download:'下载文件',
+    perm_contract_edit:'修改合同',
+    perm_admin_users:'用户管理', perm_admin_roles:'角色管理', perm_admin_llm:'模型配置',
+    toast_role_saved:'角色已保存', toast_role_deleted:'角色已删除', toast_roles_updated:'角色已更新',
+    toast_pw_changed:'密码已修改', toast_pw_fail:'修改失败：', pw_old:'原密码', pw_new:'新密码（至少8位）',
+    st_active:'正常', st_pending:'待审批', st_rejected:'已拒绝', st_suspended:'已停用',
+    search_ph:'搜索合同号 / 地址 / 产权人', no_result:'没有匹配的合同', filter_failed:'失败',
+    retry_analysis:'重新分析', delete_contract:'删除合同',
+    confirm_retry:'重新分析会生成新版本报告，确认继续？',
+    confirm_retry_force:'当前任务已经停住（分析服务离线或长时间无进展）。强制重新分析会作废这条任务并重新排队，确认继续？',
+    confirm_retry_edited:'这份报告已被人工修改！重新分析会生成全新版本，原有修改不会带到新报告。确认仍要继续？',
+    toast_retry_edited_blocked:'报告已修改：请再次确认后重新分析',
+    confirm_delete:'删除后合同、报告与文件都会被移除，且不可恢复。确认删除？',
+    toast_retried:'已重新排队分析', toast_deleted:'合同已删除', toast_del_fail:'删除失败：',
+    job_title:'分析进度', job_none:'暂无任务记录', job_updated:'更新于', job_attempt:'尝试次数',
+    stage_S0:'领取任务', stage_S1:'解析 PDF', stage_S2:'分段', stage_S3:'抽取内容',
+    stage_S4:'校验', stage_S5:'生成报告', stage_S6:'门禁', stage_S7:'入库',
+    job_failed_hint:'分析失败。检查模型配置后可点「重新分析」。',
+    job_awaiting_hint:'尚未配置大模型接口：配置后点「重新分析」即可继续。',
+    err_AlreadyRunning:'分析正在进行中', err_OwnerOnly:'只有合同所有者或管理员可以删除',
+    edit_contract:'编辑合同信息', edit_contract_h:'修改合同信息', add_item:'+ 新增条目',
+    fld_address:'物业地址', fld_title_vol:'产权卷号 Volume', fld_title_fol:'产权册号 Folio',
+    fld_lot:'地块号 Lot', fld_plan:'规划图号 Plan', fld_owner:'登记业主',
+    fld_area:'土地面积（㎡）', fld_council:'市政费（$）', fld_water:'水费（$）',
+    edit_item:'编辑条目', new_item:'新增条目', btn_edit:'编辑',
+    fld_item:'条目内容（不可修改）', fld_item_new:'条目内容', need_item:'请填写条目内容', fld_provided:'提供情况', fld_verified:'核对结论',
+    fld_contents:'核查内容', fld_notes:'备注', fld_pages:'页码（逗号分隔）',
+    fld_code:'条目编号（选填，留空自动生成）', fld_section:'所属章节',
+    item_immutable_hint:'条目本身不可修改、不可删除；如需补充请在对应章节新增条目。',
+    p_Present:'已提供', p_Missing:'缺失', p_Unclear:'不清晰', p_Awaiting:'待提供', p_NA:'不适用',
+    edit_warn_running:'该合同正在分析中，分析完成后会覆盖这里的字段。',
+    edit_need_report:'报告生成后才能编辑核查清单。',
+    toast_saved:'已保存', toast_save_fail:'保存失败：', toast_item_added:'条目已新增：',
+    err_ItemImmutable:'条目本身不可修改，请新增条目', err_EditForbidden:'只有合同所有者或管理员可以编辑',
+    err_NotNumber:'数字格式不正确', err_CodeExists:'该条目编号已存在', err_NoField:'没有需要保存的内容',
+    kpi_status:'状态', kpi_risks:'风险项', kpi_followups:'需跟进', kpi_version:'报告版本',
+    search_in_contract:'在本合同中搜索（条款号 / 条目 / 内容）', clear:'清除',
+    search_hits:'搜索结果', followups_tab:'需跟进', no_followups:'这份报告没有需跟进事项',
+    audit_title:'修改记录', show:'展开', hide:'收起', no_audit:'暂无修改记录', pages:'页码',
+    audit_edit_contract:'修改合同信息', audit_edit_item:'修改条目', audit_add_item:'新增条目',
+    cfg_effective:'已生效', cfg_pending:'未生效', cfg_source:'来源：数据库系统参数',
+    cfg_updated:'更新于', cfg_by:'由', cfg_refresh:'保存后立即生效，下次修改前一直沿用'
+  },
+  en: {
+    app_title:'Contract Review', login_title:'Sign in', account:'Account', account_ph:'Account (no phone needed; letters/digits/email-style)',
+    srv_change:'Change server address', srv_native_only:'Server address can only be changed inside the App',
+    password:'Password', pw_ph:'At least 8 characters', login_btn:'Sign in', go_register:'Create account',
+    remember_pw:'Remember password (auto-fill next time)',
+    dlg_ok:'OK', dlg_confirm:'Please confirm', dlg_pw_required:'Both old and new passwords are required',
+    register_title:'Register', display_name:'Name / Organisation', optional:'Optional', submit_register:'Submit registration',
+    back_login:'Back to sign in', register_hint:'An administrator must approve your account before you can use it.',
+    reg_role:'Requested role',
+    logout:'Sign out', pending_members:'Pending members', approve:'Approve', reject:'Reject', no_pending:'No pending members',
+    upload_title:'Upload contract', upload_btn:'Upload & queue analysis', upload_hint:'Re-uploading the same file returns the existing contract; no duplicate case is created.',
+    vis_label:'Visibility', vis_shared:'Shared with team (others can view)', vis_private:'Only me',
+    vis_hint:'You can switch this any time from the contract detail.',
+    vis_shared_tag:'Shared', vis_private_tag:'Private', vis_by:'By ',
+    vis_make_private:'Make it private', vis_make_shared:'Make it shared',
+    toast_vis_shared:'Now shared', toast_vis_private:'Now private',
+    my_contracts:'My contracts', filter_all:'All', filter_queued:'Queued', filter_completed:'Completed',
+    loading:'Loading…', no_contracts:'No contracts yet — upload a PDF to get started', risk_items:'Risk items',
+    no_address:'No address', detail_title:'Contract detail', back:'Back', dl_original:'Original PDF', dl_report:'Report PDF',
+    info_tab:'Details', archived_tag:'Archived', archive_contract:'Archive', restore_contract:'Unarchive',
+    archive_note:'This contract is archived: read-only, no editing or re-analysis.',
+    confirm_archive:'Archived contracts leave the normal list and become read-only. Archive this contract?',
+    confirm_restore:'Restoring returns the contract to the normal list and makes it editable. Continue?',
+    toast_archived:'Contract archived', toast_restored:'Contract restored',
+    dl_edited_report:'Edited report PDF', edited_tag:'Edited', kv_edited:'Report edited at',
+    checklist:'Checklist A–G', no_items:'No items in this section (report may not be generated yet)',
+    wait_pending_title:'Awaiting admin approval', wait_rejected_title:'Registration not approved', wait_suspended_title:'Account suspended',
+    wait_pending_desc:'Your account has been submitted; an administrator must approve it before you can upload or query contracts.', wait_other_desc:'Please contact the administrator.',
+    kv_status:'Status', kv_property:'Property address', kv_title:'Title', kv_lot:'Lot / Plan',
+    kv_owner:'Registered owner', kv_area:'Area', kv_council:'Council rates', kv_water:'Water charges', kv_report:'Report status',
+    report_none:'Report not generated yet', sqm:'sqm',
+    st_queued:'Queued', st_completed:'Completed', st_processing:'Analyzing', st_failed:'Failed', st_awaiting_llm:'Awaiting LLM',
+    st_queued_off:'Queued · worker offline', st_stalled:'Interrupted',
+    job_queued:'Queued — waiting for the worker to claim it',
+    job_queued_alive:'The worker is online; this is normally claimed within seconds.',
+    job_queued_off:'The analysis worker is not running, so this job will not start by itself. Nothing is lost — start the worker and it is picked up automatically; no need to re-upload.',
+    job_running:'Analyzing',
+    job_sec_ago:'s ago', job_min_ago:'m ago',
+    job_no_progress:'No progress for', job_stalled:'minutes — the run may have died (worker offline or model not responding).',
+    job_worker_on:'Worker online', job_worker_off:'Worker not running',
+    retry_force:'Force re-analyze',
+    toast_worker_off:'Uploaded, but no analysis worker is running — it will stay queued.',
+    v_Checked:'Checked', v_Action:'Action', v_Unclear:'Unclear', v_NA:'N/A', v_FollowUp:'Follow-up required',
+    toast_login_fail:'Sign-in failed: ', toast_reg_ok:'Registered; awaiting admin approval', toast_reg_fail:'Registration failed: ',
+    toast_approved:'Approved', toast_rejected:'Rejected', toast_need_file:'Please choose a PDF file first',
+    toast_only_pdf:'Only PDF files are accepted', toast_uploading:'Uploading…', toast_upload_ok:'Uploaded: ',
+    toast_dup:'Already exists, returning contract: ', toast_upload_fail:'Upload failed: ',
+    err_InvalidAccount:'Invalid account or password', err_AccountExists:'Account already registered',
+    err_AccountFormat:'Account must be 3-64 chars: letters, digits, dot, underscore or hyphen',
+    err_PasswordShort:'Password must be at least 8 characters', err_NotSignedIn:'Not signed in', err_BadSession:'Invalid or expired session',
+    err_AdminOnly:'Admin role required', err_NoPermission:'Your role lacks this permission', err_OnlySuper:'Superuser only',
+    err_SystemRole:'Built-in roles cannot be deleted or renamed', err_LastAdmin:'Cannot remove the last superuser', err_RoleExists:'Role name already exists',
+    err_NotFound:'Contract not found', err_OnlyPdf:'Only PDF files are accepted',
+    err_EmptyFile:'Empty file', err_BadSection:'section must be one of A-G', err_NoReport:'Report not generated yet',
+    sec_A:'A. PROPERTY & TITLE INFORMATION', sec_B:'B. PLANNING, ZONING & GOVERNMENT', sec_C:'C. RATES, CHARGES & OUTGOINGS',
+    sec_D:'D. BUILDING, CONSTRUCTION & CONDITION', sec_E:'E. LEASES, OCCUPANCY & THIRD PARTY INTERESTS',
+    sec_F:'F. RISKS, LITIGATION & SPECIAL MATTERS', sec_G:'G. REQUIRED DOCUMENTS & ATTACHMENTS',
+    llm_cfg_title:'LLM API settings', llm_cfg_hint:'Changes take effect on the Worker immediately; no restart needed.',
+    llm_timeout:'Request timeout (s)', llm_max_tokens:'Max output tokens',
+    llm_timeout_hint:'Too short a timeout fails the whole report; use 300s or more for 100+ page packs.',
+    llm_base_url:'Base URL', llm_key:'API Key', llm_model:'Model',
+    llm_vision:'Vision model (optional, for image-only pages)', llm_enabled:'Enabled',
+    save:'Save', test_conn:'Test connection',
+    cfg_saved:'Configuration saved', cfg_save_fail:'Save failed: ', cfg_testing:'Testing…',
+    cfg_ok:'Connection OK', cfg_fail:'Connection failed: ', cfg_keep_key:'(saved key; leave blank to keep)',
+    cfg_not_set:'Not configured',
+    tab_entry:'Entry', tab_query:'Query', tab_profile:'Profile', tab_more1:'To-do', tab_more2:'Export',
+    nav_sys:'Settings', nav_users:'User auth', nav_roles:'Roles', nav_log:'Log', account_card:'Account',
+    tab_archived:'Archive', archived_title:'Archived contracts',
+    fu_page_title:'Follow-ups', fu_page_hint:'Every matter that still needs the vendor solicitor to supply or clarify. Tap a contract number to open it.',
+    fu_search_ph:'Search matter / contract / address', fu_make_doc:'Build question list', fu_empty:'No follow-up items',
+    fu_summary:'{n} items · {c} contracts', fu_doc_title:'Questions for the vendor solicitor',
+    export_title:'Export', export_hint:'Export the checklist or the follow-up list as CSV — opens directly in Excel.',
+    export_pick:'Contract', export_items:'Checklist CSV', export_fus:'Follow-ups CSV',
+    export_preview:'Preview / copy', export_note:'Browsers download straight away; if nothing opens on a phone, use “Preview / copy”.',
+    audit_page_title:'Operation log', audit_page_hint:'Every write action: upload, approval, edit, delete.',
+    audit_search_ph:'Search actor / target / action', audit_all_actions:'All actions', audit_empty:'No log entries',
+    no_perm:'Your role has no access to this page',
+    copy:'Copy', close:'Close', copied:'Copied', copy_fail:'Copy failed — long-press to select the text',
+    perm_admin_audit:'Operation log',
+    act_upload:'Upload contract', act_login:'Sign in', act_register:'Register', act_edit_contract:'Edit contract',
+    act_edit_item:'Edit item', act_add_item:'Add item', act_delete:'Delete contract',
+    act_retry:'Re-analyse', act_approve_user:'Approve user', act_reject_user:'Reject user',
+    act_suspend_user:'Suspend user', act_assign_roles:'Assign roles', act_change_password:'Change password',
+    act_create_role:'Create role', act_update_role:'Update role', act_delete_role:'Delete role',
+    act_update_llm_config:'Update LLM config', act_delete_cleanup_warn:'Cleanup failed',
+    coming_soon:'Coming soon', coming_soon_desc:'This feature is planned. Stay tuned.',
+    profile_title:'My profile', profile_account:'Account', profile_name:'Name', profile_status:'Status',
+    profile_role:'Current roles', profile_perms:'Permissions', change_pw:'Change password',
+    mgmt_title:'Administration', all_users:'All users & roles', assign_roles_title:'Assign roles',
+    cancel:'Cancel', save_roles:'Save roles', role_mgmt:'Role management', new_role:'New role', edit_role:'Edit role',
+    role_name:'Role ID (lowercase)', role_label_zh:'Label (zh)', role_label_en:'Label (en)', role_desc:'Description',
+    role_perms:'Permission points', save_role:'Save role', builtin:'Built-in', members:'members', confirm_del_role:'Delete this role?',
+    no_upload_perm:'Your role has no upload permission. Contact an administrator.',
+    role_admin:'Super Admin', role_operator:'Operator', role_viewer:'Viewer',
+    perm_contract_view:'View contracts', perm_contract_upload:'Upload & analyze', perm_contract_download:'Download files',
+    perm_contract_edit:'Edit contracts',
+    perm_admin_users:'Manage users', perm_admin_roles:'Manage roles', perm_admin_llm:'LLM config',
+    toast_role_saved:'Role saved', toast_role_deleted:'Role deleted', toast_roles_updated:'Roles updated',
+    toast_pw_changed:'Password changed', toast_pw_fail:'Change failed: ', pw_old:'Old password', pw_new:'New password (8+ chars)',
+    st_active:'Active', st_pending:'Pending', st_rejected:'Rejected', st_suspended:'Suspended',
+    search_ph:'Search contract no. / address / owner', no_result:'No matching contracts', filter_failed:'Failed',
+    retry_analysis:'Re-analyze', delete_contract:'Delete',
+    confirm_retry:'Re-analysis produces a new report version. Continue?',
+    confirm_retry_force:'This run is stuck (worker offline or no progress). Forcing a re-analysis discards that job and queues a new one. Continue?',
+    confirm_retry_edited:'This report has been edited manually. Re-analysis creates a brand-new version and your edits will NOT be carried over. Continue anyway?',
+    toast_retry_edited_blocked:'Report was edited: please confirm again to re-analyse',
+    confirm_delete:'This removes the contract, its report and files permanently. Continue?',
+    toast_retried:'Re-queued for analysis', toast_deleted:'Contract deleted', toast_del_fail:'Delete failed: ',
+    job_title:'Analysis progress', job_none:'No job record yet', job_updated:'Updated', job_attempt:'Attempts',
+    stage_S0:'Claiming job', stage_S1:'Parsing PDF', stage_S2:'Splitting', stage_S3:'Extracting',
+    stage_S4:'Validating', stage_S5:'Rendering report', stage_S6:'Gate check', stage_S7:'Ingesting',
+    job_failed_hint:'Analysis failed. Check the model config, then tap Re-analyze.',
+    job_awaiting_hint:'No LLM endpoint configured yet — configure it, then tap Re-analyze to continue.',
+    err_AlreadyRunning:'Analysis is already running',
+    err_OwnerOnly:'Only the owner or an administrator can delete this contract',
+    edit_contract:'Edit contract details', edit_contract_h:'Edit contract details', add_item:'+ Add item',
+    fld_address:'Property address', fld_title_vol:'Title volume', fld_title_fol:'Title folio',
+    fld_lot:'Lot number', fld_plan:'Plan number', fld_owner:'Registered owner',
+    fld_area:'Land area (sqm)', fld_council:'Council rates ($)', fld_water:'Water charges ($)',
+    edit_item:'Edit item', new_item:'New item', btn_edit:'Edit',
+    fld_item:'Item (read-only)', fld_item_new:'Item text', need_item:'Please enter the item text', fld_provided:'Provided', fld_verified:'Verified',
+    fld_contents:'Findings', fld_notes:'Notes', fld_pages:'Pages (comma-separated)',
+    fld_code:'Item code (optional; auto-generated if blank)', fld_section:'Section',
+    item_immutable_hint:'The item itself cannot be changed or deleted. Add a new item in the section instead.',
+    p_Present:'Present', p_Missing:'Missing', p_Unclear:'Unclear', p_Awaiting:'Awaiting', p_NA:'N/A',
+    edit_warn_running:'Analysis is running; these fields will be overwritten when it completes.',
+    edit_need_report:'A report must exist before the checklist can be edited.',
+    toast_saved:'Saved', toast_save_fail:'Save failed: ', toast_item_added:'Item added: ',
+    err_ItemImmutable:'Item text cannot be modified; add a new item instead',
+    err_EditForbidden:'Only the owner or an administrator can edit this contract',
+    err_NotNumber:'Value must be a number', err_CodeExists:'Item code already exists',
+    err_NoField:'Nothing to save',
+    kpi_status:'Status', kpi_risks:'Open risks', kpi_followups:'Follow-ups', kpi_version:'Report version',
+    search_in_contract:'Search this contract (clause / item / findings)', clear:'Clear',
+    search_hits:'Search results', followups_tab:'Follow-ups', no_followups:'No follow-up items in this report',
+    audit_title:'Change history', show:'Show', hide:'Hide', no_audit:'No changes recorded', pages:'Pages',
+    audit_edit_contract:'Contract details edited', audit_edit_item:'Item edited', audit_add_item:'Item added',
+    cfg_effective:'Active', cfg_pending:'Not active', cfg_source:'Source: database system parameter',
+    cfg_updated:'Updated', cfg_by:'by', cfg_refresh:'Applies immediately on save and stays until the next change'
+  }
+};
+// Map backend English error text -> i18n key (substring match).
+const ERR_MAP = [
+  ['Invalid account or password','err_InvalidAccount'],
+  ['Account already registered','err_AccountExists'],
+  ['Account must be 3-64 chars','err_AccountFormat'],
+  ['Password must be at least 8','err_PasswordShort'],
+  ['Not signed in','err_NotSignedIn'],
+  ['Invalid or expired session','err_BadSession'],
+  ['Admin role required','err_AdminOnly'],
+  ['Permission required','err_NoPermission'],
+  ['Only a superuser','err_OnlySuper'],
+  ['System roles cannot','err_SystemRole'],
+  ['last superuser','err_LastAdmin'],
+  ['Role name already exists','err_RoleExists'],
+  ['Contract not found','err_NotFound'],
+  ['Only PDF files','err_OnlyPdf'],
+  ['Empty file','err_EmptyFile'],
+  ['section must be one of','err_BadSection'],
+  ['Report not generated','err_NoReport'],
+  ['Analysis is already running','err_AlreadyRunning'],
+  ['item cannot be modified','err_ItemImmutable'],
+  ['Only the owner or an administrator can edit','err_EditForbidden'],
+  ['must be a number','err_NotNumber'],
+  ['Item code already exists','err_CodeExists'],
+  ['No editable field supplied','err_NoField'],
+  ['Only the owner or an administrator','err_OwnerOnly']
+];
+let savedLang = localStorage.getItem('cr_lang');
+let LANG = savedLang || ((navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en');
+if (LANG !== 'zh' && LANG !== 'en') LANG = 'zh';
+const t = k => (I18N[LANG] && I18N[LANG][k]) || (I18N.zh[k]) || k;
+function errText(msg) {
+  if (LANG === 'zh') {
+    for (const pair of ERR_MAP) if (String(msg).includes(pair[0])) return t(pair[1]);
+  }
+  return String(msg);
+}
+function applyLang() {
+  document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
+  $('langBtn').textContent = LANG === 'zh' ? 'EN' : '中文';
+  if (me) {
+    // applyIdentity() re-picks the tab, which closes the detail view; remember it
+    // so switching language does not kick the user back to the list.
+    const wasDetail = currentContract;
+    if (!$('itemModal').classList.contains('hide')) closeItemModal();
+    if (!$('docModal').classList.contains('hide')) closeDocModal();
+    auditActionsLoaded = false;   // rebuild the action dropdown in the new language
+    applyIdentity(true);
+    if (wasDetail) openDetail(wasDetail, true);
+  }
+}
+function toggleLang() {
+  LANG = LANG === 'zh' ? 'en' : 'zh';
+  localStorage.setItem('cr_lang', LANG);
+  applyLang();
+}
+
+/* ---------- app ---------- */
+let me = null, currentContract = null, currentSection = 'A', statusFilter = '', currentTab = 'query', archiveQ = '';
+let searchQ = '', pollTimer = null, searchDebounce = null, detailTimer = null;
+let allRoles = [], allPerms = [], assignUid = null, editingRoleId = null;
+let currentItems = [], currentDetail = null, editingItemId = null, itemMode = 'edit';
+let itemQ = '', itemQTimer = null, followups = [];
+const PROVIDED_ENUM = ['Present','Missing','Unclear','Awaiting','NA'];
+const VERIFIED_ENUM = ['Checked','Action','Unclear','NA'];
+const SECTIONS = ['A','B','C','D','E','F','G'];
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const hasPerm = code => !!(me && (me.permissions || []).includes(code));
+
+/* ---- native shell bridge (Android WebView APK) ----
+   The APK shell exposes window.CRApp. Files must go through it: WebView cannot
+   render a PDF, so a plain navigation to /original silently does nothing, and a
+   blob: / <a download> download is not delivered to DownloadListener either. */
+function nativeApp() {
+  return (typeof window !== 'undefined' && window.CRApp &&
+          typeof window.CRApp.download === 'function') ? window.CRApp : null;
+}
+function nativeDownload(path, name) {
+  const n = nativeApp();
+  if (!n) return false;
+  try { n.download(new URL(path, location.origin).href, name || ''); return true; }
+  catch (e) { return false; }
+}
+/* 改后台地址：v1.2+ 的壳提供 serverConfig()；旧壳没有就走提示，别静默无反应 */
+function openServerConfig() {
+  const n = nativeApp();
+  if (n && typeof n.serverConfig === 'function') { n.serverConfig(); return; }
+  toast(t('srv_native_only'));
+}
+function showServerRow() {
+  const row = $('srvRow');
+  if (!row) return;
+  const n = nativeApp();
+  const ok = !!(n && typeof n.serverConfig === 'function');
+  row.classList.toggle('hide', !ok);
+  if (ok) $('srvNow').textContent = ' · ' + location.host;
+}
+
+function toast(msg) {
+  const el = $('toast'); el.textContent = msg; el.style.display = 'block';
+  clearTimeout(el._t); el._t = setTimeout(() => el.style.display = 'none', 3200);
+}
+async function api(path, opts = {}) {
+  const r = await fetch('/api' + path, {credentials:'same-origin', ...opts});
+  let d = {}; try { d = await r.json(); } catch {}
+  if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+  return d;
+}
+function show(id) {
+  ['loginView','regView','waitView','mainView'].forEach(v => $(v).classList.toggle('hide', v !== id));
+  if (id === 'loginView') { showServerRow(); restoreLoginInfo(); }
+}
+const VERIFIED_CLS = {Checked:'b-checked', Action:'b-action', Unclear:'b-unclear',
+                      FollowUp:'b-unclear', NA:'b-na'};
+function badge(v) {
+  return `<span class="badge ${VERIFIED_CLS[v] || 'b-na'}">${esc(t('v_' + v) || v || '-')}</span>`;
+}
+const PROVIDED_CLS = {Present:'b-present', Missing:'b-missing', Unclear:'b-unclear',
+                      Awaiting:'b-awaiting', NA:'b-na'};
+// `provided` has no v_* keys; fall back to the raw value instead of the key name.
+function provLabel(v) {
+  return (I18N[LANG] && I18N[LANG]['p_' + v]) || v || '-';
+}
+function provBadge(v) {
+  return `<span class="badge ${PROVIDED_CLS[v] || 'b-na'}">${esc(provLabel(v))}</span>`;
+}
+// 报告整体结论可能是 "FollowUp required" 这类带空格的写法，直接拼 key 会漏出原文
+function overallLabel(s) {
+  if (!s) return '-';
+  const k = 'v_' + s;
+  if (I18N[LANG] && I18N[LANG][k]) return I18N[LANG][k];
+  if (/^follow\s*-?\s*up/i.test(s)) return t('v_FollowUp');
+  return s;
+}
+/* 「待分析」其实有两种完全不同的处境：Worker 活着=几秒后就开始；
+   Worker 没跑=永远排下去。徽章必须把这两者区分开，否则用户只能干等。 */
+let workerOnline = false, workerKnown = false;
+function fmtAgo(sec) {
+  if (sec === null || sec === undefined) return '';
+  const s = Math.max(0, Math.round(Number(sec)));
+  return s < 60 ? s + t('job_sec_ago') : Math.round(s / 60) + t('job_min_ago');
+}
+function statusBadge(c) {
+  if (typeof c === 'string') c = {status: c};
+  const st = c.status;
+  if (st === 'completed') return badge('Checked');
+  if (st === 'failed') {
+    return `<span class="badge b-fail">${esc(t('st_failed'))}${
+      c.error_code ? ' · ' + esc(c.error_code) : ''}</span>`;
+  }
+  if (st === 'awaiting_llm') {
+    return `<span class="badge b-warn">${esc(t('st_awaiting_llm'))}</span>`;
+  }
+  if (st === 'analyzing') {
+    const stage = c.stage ? (t('stage_' + c.stage) || c.stage) : '';
+    const msg = c.stage_msg ? ' ' + c.stage_msg : '';
+    const age = fmtAgo(c.stage_age_seconds);
+    return `<span class="badge b-live">${esc(t('st_processing'))}${
+      stage ? ' · ' + esc(stage) + esc(msg) : ''}${age ? ' · ' + age : ''}</span>`;
+  }
+  if (st === 'queued' && workerKnown && !workerOnline) {
+    return `<span class="badge b-warn">${esc(t('st_queued_off'))}</span>`;
+  }
+  return `<span class="badge b-queue">${esc(t('st_' + st) || st)}</span>`;
+}
+/* 共享 / 私有徽章（contracts.visibility） */
+function visBadge(v) {
+  const shared = v !== 'private';
+  return `<span class="badge ${shared ? 'b-checked' : 'b-na'}">${
+    shared ? esc(t('vis_shared_tag')) : esc(t('vis_private_tag'))}</span>`;
+}
+function roleName(r) {
+  const key = 'role_' + r;
+  return (I18N[LANG][key] && I18N[LANG][key] !== key) ? I18N[LANG][key] : r;
+}
+function permName(code) { return t('perm_' + code.replace(/\./g, '_')) || code; }
+
+/* ---- 页面内对话框：替代原生 confirm/prompt（安卓 WebView 下原生弹窗会带"网址为 xxx 的网页显示"标题） ---- */
+let _dlgResolve = null;
+// fields: [{label, type, value}]；返回 Promise：确认→值数组（无字段时为 true），取消→null
+function uiDialog({message, fields, danger} = {}) {
+  return new Promise(resolve => {
+    _dlgResolve = resolve;
+    $('dlgTitle').textContent = t('dlg_confirm');
+    $('dlgMessage').textContent = message || '';
+    $('dlgMessage').style.display = message ? '' : 'none';
+    $('dlgFields').innerHTML = (fields || []).map((f, i) =>
+      `<label>${esc(f.label)}</label><input type="${f.type || 'text'}" id="dlgF${i}" value="${esc(f.value || '')}" autocomplete="${f.autocomplete || 'off'}">`).join('');
+    const ok = $('dlgOk');
+    ok.textContent = t('dlg_ok');
+    ok.classList.toggle('danger', !!danger);
+    $('dlgModal').classList.remove('hide');
+    setTimeout(() => { const first = $('dlgF0'); if (first) first.focus(); }, 30);
+  });
+}
+function dlgSubmit() {
+  const inputs = [...$('dlgFields').querySelectorAll('input')];
+  const vals = inputs.map(x => x.value);
+  if ($('dlgFields').dataset.required === '1' && vals.some(v => !v)) { toast(t('dlg_pw_required')); return; }
+  dlgFinish(inputs.length ? vals : true);
+}
+function dlgCancel() { dlgFinish(null); }
+function dlgFinish(val) {
+  const r = _dlgResolve; _dlgResolve = null;
+  $('dlgModal').classList.add('hide');
+  if (r) r(val);
+}
+function uiConfirm(message, danger) { return uiDialog({message, danger}); }
+function uiPrompt(message, fields, required) {
+  $('dlgFields').dataset.required = required ? '1' : '';
+  return uiDialog({message, fields});
+}
+
+/* ---- 记住上次登录信息：账号总是记住；密码仅在勾选时记住 ---- */
+const LOGIN_SAVE_KEY = 'cr_login_saved';
+function saveLoginInfo() {
+  try {
+    const remember = !!($('rememberPw') && $('rememberPw').checked);
+    localStorage.setItem(LOGIN_SAVE_KEY, JSON.stringify({
+      username: $('loginAccount').value.trim(),
+      remember: remember,
+      password: remember ? $('loginPw').value : ''
+    }));
+  } catch (e) { /* localStorage 被禁用时静默降级，不影响登录 */ }
+}
+function restoreLoginInfo() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LOGIN_SAVE_KEY) || '{}');
+    if (s.username) $('loginAccount').value = s.username;
+    const remember = !!s.remember;
+    if ($('rememberPw')) $('rememberPw').checked = remember;
+    $('loginPw').value = remember ? (s.password || '') : '';
+  } catch (e) { /* 读取失败就当没记住过 */ }
+}
+function clearSavedPassword() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LOGIN_SAVE_KEY) || '{}');
+    s.password = ''; s.remember = false;
+    localStorage.setItem(LOGIN_SAVE_KEY, JSON.stringify(s));
+  } catch (e) {}
+}
+
+/* ---- auth ---- */
+async function doLogin() {
+  try {
+    const d = await api('/auth/login', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:$('loginAccount').value.trim(), password:$('loginPw').value})});
+    me = d.user; applyIdentity();
+    saveLoginInfo();
+  } catch (e) { toast(t('toast_login_fail') + errText(e.message)); }
+}
+async function doRegister() {
+  try {
+    await api('/auth/register', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:$('regAccount').value.trim(), password:$('regPw').value,
+                           display_name:$('regName').value.trim(), role:$('regRole').value})});
+    toast(t('toast_reg_ok')); show('loginView');
+  } catch (e) { toast(t('toast_reg_fail') + errText(e.message)); }
+}
+async function doLogout() {
+  await api('/auth/logout', {method:'POST'}).catch(()=>{});
+  me = null; currentContract = null; currentTab = 'query'; archiveQ = ''; $('who').textContent = '';
+  // Drop cached workbench data so the next user never sees the previous account's rows.
+  contractsCache = []; fuItems = []; fuQ = ''; auditQ = ''; auditActionsLoaded = false;
+  $('bottomBar').classList.add('hide'); show('loginView');
+}
+async function changePw() {
+  const vals = await uiPrompt('', [
+    {label:t('pw_old'), type:'password'},
+    {label:t('pw_new'), type:'password'}
+  ], true);
+  if (!vals) return;
+  const [old, nw] = vals;
+  api('/auth/change-password', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({old_password:old, new_password:nw})})
+    .then(()=>{ clearSavedPassword(); toast(t('toast_pw_changed')); })
+    .catch(e=>toast(t('toast_pw_fail')+errText(e.message)));
+}
+function applyIdentity(_fromLang) {
+  $('who').textContent = me.display_name || me.username || me.phone || '';
+  if (me.status !== 'active') {
+    $('bottomBar').classList.add('hide');
+    show('waitView');
+    $('waitTitle').textContent = me.status === 'pending' ? t('wait_pending_title')
+      : me.status === 'rejected' ? t('wait_rejected_title') : t('wait_suspended_title');
+    $('waitDesc').textContent = me.status === 'pending' ? t('wait_pending_desc') : t('wait_other_desc');
+    return;
+  }
+  show('mainView');
+  $('bottomBar').classList.remove('hide');
+  // permission-driven visibility
+  $('noUploadBox').classList.toggle('hide', hasPerm('contract.upload'));
+  $('uploadWrap').classList.toggle('hide', !hasPerm('contract.upload'));
+  const isAdminish = hasPerm('admin.users') || hasPerm('admin.roles') || hasPerm('admin.llm') || hasPerm('admin.audit');
+  $('mgmtUsersBlock').classList.toggle('hide', !hasPerm('admin.users'));
+  $('mgmtRolesBlock').classList.toggle('hide', !hasPerm('admin.roles'));
+  $('mgmtLlmBlock').classList.toggle('hide', !hasPerm('admin.llm'));
+  // Each bottom tab maps to a capability. The admin account is a pure system
+  // administrator: 系统设置 / 用户鉴权 / 角色配置 / 日志, never a contract screen
+  // and no 个人信息 tab (its password entry lives in 系统设置).
+  setTabVisible('entry', hasPerm('contract.upload'));
+  setTabVisible('query', hasPerm('contract.view'));
+  setTabVisible('archived', hasPerm('contract.archive_view'));
+  setTabVisible('more1', hasPerm('contract.view'));
+  setTabVisible('more2', hasPerm('contract.download'));
+  setTabVisible('profile', !isAdminish);
+  // 系统设置留着「账号（改密码/退出）」，所以任一 admin.* 权限都要能进来
+  setTabVisible('sys', hasPerm('admin.llm') || hasPerm('admin.users') || hasPerm('admin.roles'));
+  setTabVisible('users', hasPerm('admin.users'));
+  setTabVisible('roles', hasPerm('admin.roles'));
+  setTabVisible('log', hasPerm('admin.audit'));
+  if (!currentTab || !tabVisible(currentTab)) currentTab = firstVisibleTab();
+  pickTab(currentTab, true);   // pickTab already triggers the per-tab loader
+  fillProfile();
+  if (isAdminish) loadAdminData();
+}
+function setTabVisible(tab, on) {
+  const b = document.querySelector('.btab[data-tab="' + tab + '"]');
+  if (b) b.classList.toggle('hide', !on);
+}
+function tabVisible(tab) {
+  const b = document.querySelector('.btab[data-tab="' + tab + '"]');
+  if (!b) return false;
+  return !b.classList.contains('hide');
+}
+function firstVisibleTab() {
+  // Follow the visual order of the bottom bar so the landing tab always equals
+  // the left-most tab the role can actually use (query before entry).
+  const b = [...document.querySelectorAll('.btab')].find(x => !x.classList.contains('hide'));
+  return b ? b.dataset.tab : 'profile';
+}
+function fillProfile() {
+  $('pfAccount').textContent = me.username || '-';
+  $('pfName').textContent = me.display_name || '-';
+  $('pfStatus').textContent = t('st_' + me.status) || me.status;
+  $('pfRoles').innerHTML = (me.roles||[]).map(r=>`<span class="badge b-role">${esc(roleName(r))}</span>`).join('') || '-';
+  $('pfPerms').innerHTML = (me.permissions||[]).map(p=>`<span class="badge b-perm">${esc(permName(p))}</span>`).join('') || '-';
+}
+
+/* ---- workbench: to-do worklist / export / global operation log ---- */
+let fuItems = [], fuQ = '', fuTimer = null, contractsCache = [];
+let auditQ = '', auditTimer = null, auditActionsLoaded = false;
+
+// t() falls back to the key name, so a missing act_* label would render as
+// "act_delete_role" — resolve explicitly and keep the raw action as last resort.
+function actionLabel(a) {
+  const k = 'act_' + a;
+  return (I18N[LANG] && I18N[LANG][k]) || I18N.zh[k] || a;
+}
+async function loadFollowups() {
+  try {
+    const d = await api('/followups' + (fuQ ? '?q=' + encodeURIComponent(fuQ) : ''));
+    fuItems = d.items || [];
+    $('fuSummary').textContent = t('fu_summary').replace('{n}', d.total).replace('{c}', d.contracts);
+    renderFuList();
+  } catch (e) {
+    $('fuList').innerHTML = `<div class="empty">${esc(errText(e.message))}</div>`;
+  }
+}
+function onFuSearch() {
+  clearTimeout(fuTimer);
+  fuTimer = setTimeout(() => { fuQ = $('fuSearch').value.trim(); loadFollowups(); }, 280);
+}
+function renderFuList() {
+  if (!fuItems.length) { $('fuList').innerHTML = `<div class="empty">${t('fu_empty')}</div>`; return; }
+  $('fuList').innerHTML = fuItems.map((f, i) => `
+    <div class="fu">
+      <div class="row" style="align-items:baseline;gap:8px">
+        <h4 style="margin:0">${i + 1}. ${esc(f.matter)}</h4>
+        <a href="javascript:void(0)" style="font-size:12px;white-space:nowrap"
+           onclick="jumpToContract('${esc(f.contract_no)}')">${esc(f.contract_no)}</a>
+      </div>
+      ${f.address ? `<div class="muted" style="font-size:12px">${esc(f.address)}</div>` : ''}
+      ${(f.finding || []).length ? `<ul>${f.finding.map(x => `<li>${escapeRich(x)}</li>`).join('')}</ul>` : ''}
+      ${(f.action || []).length ? `<ul>${f.action.map(x => `<li>${escapeRich(x)}</li>`).join('')}</ul>` : ''}
+      ${f.pages ? `<div class="pgs">${esc(t('pages'))}: ${esc(f.pages)}</div>` : ''}
+    </div>`).join('');
+}
+async function jumpToContract(no) {
+  pickTab('query');
+  await openDetail(no);
+}
+function buildFuDoc() {
+  const groups = {};
+  fuItems.forEach(f => { (groups[f.contract_no] = groups[f.contract_no] || []).push(f); });
+  const lines = [t('fu_doc_title'), ''];
+  Object.keys(groups).forEach(cn => {
+    const addr = groups[cn][0].address || '';
+    lines.push(`## ${cn}${addr ? ' — ' + addr : ''}`);
+    groups[cn].forEach((f, i) => {
+      lines.push(`${i + 1}. ${plainText(f.matter)}`);
+      (f.action || []).forEach(a => lines.push(`   - ${plainText(a)}`));
+      if (f.pages) lines.push(`   (p.${f.pages})`);
+    });
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+function openFuDoc() {
+  if (!fuItems.length) return toast(t('fu_empty'));
+  openDocModal(t('fu_doc_title'), buildFuDoc());
+}
+
+/* export */
+async function fillExportSelect() {
+  try {
+    if (!contractsCache.length) {
+      const d = await api('/contracts?limit=200');
+      contractsCache = d.contracts || [];
+    }
+    const sel = $('exportContract');
+    if (!contractsCache.length) {
+      sel.innerHTML = `<option>${esc(t('no_contracts'))}</option>`;
+      sel.disabled = true; $('exportNote').textContent = ''; return;
+    }
+    const keep = sel.value;
+    // contracts with a finished report first, so the default pick is usable
+    const list = contractsCache.slice().sort((a, b) =>
+      (b.status === 'completed') - (a.status === 'completed'));
+    sel.innerHTML = list.map(c => `<option value="${esc(c.contract_no)}">${esc(c.contract_no)} · ${esc(c.property_address || c.address || '')}</option>`).join('');
+    if (keep && contractsCache.some(c => c.contract_no === keep)) sel.value = keep;
+    sel.disabled = false;
+    onExportPick();
+  } catch (e) { toast(errText(e.message)); }
+}
+function onExportPick() {
+  const c = contractsCache.find(x => x.contract_no === $('exportContract').value);
+  $('exportNote').textContent = !c ? '' : (c.status === 'completed' ? t('export_note') : t('report_none'));
+}
+function downloadExport(what) {
+  const no = $('exportContract').value;
+  if (!no) return;
+  const c = contractsCache.find(x => x.contract_no === no);
+  if (c && c.status !== 'completed') return toast(t('report_none'));
+  const path = '/api/contracts/' + encodeURIComponent(no) + '/export?what=' + what;
+  if (nativeDownload(path, no + (what === 'items' ? '_checklist.csv' : '_followups.csv'))) return;
+  const a = document.createElement('a');
+  a.href = path;
+  a.download = '';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function previewExport(what) {
+  const no = $('exportContract').value;
+  if (!no) return;
+  const c = contractsCache.find(x => x.contract_no === no);
+  if (c && c.status !== 'completed') return toast(t('report_none'));
+  try {
+    const r = await fetch('/api/contracts/' + encodeURIComponent(no) + '/export?what=' + what,
+                          {credentials: 'same-origin'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    let txt = await r.text();
+    if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
+    openDocModal(what === 'items' ? t('export_items') : t('export_fus'), txt);
+  } catch (e) { toast(errText(e.message)); }
+}
+
+/* global operation log (admin.audit) */
+function onAuditSearch() {
+  clearTimeout(auditTimer);
+  auditTimer = setTimeout(() => { auditQ = $('auditSearch').value.trim(); loadAuditLog(); }, 280);
+}
+async function loadAuditLog(reset) {
+  if (!hasPerm('admin.audit')) {
+    $('auditLogList').innerHTML = `<div class="empty">${t('no_perm')}</div>`;
+    return;
+  }
+  const sel = $('auditAction');
+  const act = sel.value || '';
+  const qs = new URLSearchParams();
+  if (act) qs.set('action', act);
+  if (auditQ) qs.set('q', auditQ);
+  const q = qs.toString();
+  try {
+    const d = await api('/admin/audit' + (q ? '?' + q : ''));
+    if (reset || !auditActionsLoaded) {
+      // sort by the visible label, not the raw action code
+      const acts = (d.actions || []).slice().sort((a, b) => actionLabel(a).localeCompare(actionLabel(b), LANG === 'zh' ? 'zh' : 'en'));
+      sel.innerHTML = `<option value="">${t('audit_all_actions')}</option>` +
+        acts.map(a => `<option value="${esc(a)}">${esc(actionLabel(a))}</option>`).join('');
+      sel.value = act;
+      auditActionsLoaded = true;
+    }
+    $('auditLogList').innerHTML = (d.logs || []).length ? d.logs.map(l => `
+      <div class="auditrow">
+        <div class="row" style="align-items:baseline">
+          <b>${esc(actionLabel(l.action))}</b>
+          <span class="muted" style="font-size:11px">${esc(fmtTime(l.created_at))}</span>
+        </div>
+        <div class="muted">${esc(l.actor)}${l.target ? ' · ' + esc(l.target) : ''}</div>
+      </div>`).join('') : `<div class="empty">${t('audit_empty')}</div>`;
+  } catch (e) {
+    $('auditLogList').innerHTML = `<div class="empty">${esc(errText(e.message))}</div>`;
+  }
+}
+
+/* generic text output modal */
+function openDocModal(title, text) {
+  $('docModalTitle').textContent = title;
+  $('docModalBody').value = text;
+  $('docModal').classList.remove('hide');
+}
+function closeDocModal() { $('docModal').classList.add('hide'); }
+async function copyDocModal() {
+  const el = $('docModalBody');
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(el.value);
+    } else {
+      el.focus(); el.select(); document.execCommand('copy');
+    }
+    toast(t('copied'));
+  } catch (e) {
+    el.focus(); el.select();
+    toast(t('copy_fail'));
+  }
+}
+
+/* ---- bottom tabs ---- */
+function pickTab(tab, _silent) {
+  // never land on a tab this role cannot use (stale click after a role change)
+  if (!tabVisible(tab)) tab = firstVisibleTab();
+  currentTab = tab;
+  document.querySelectorAll('.btab').forEach(x => x.classList.toggle('on', x.dataset.tab === tab));
+  document.querySelectorAll('.tabpage').forEach(x => x.classList.toggle('hide', x.id !== 'tab-' + tab));
+  if (tab === 'query') { closeDetail(); loadContracts(false); }
+  if (tab === 'archived') { closeDetail(); loadContracts(true); }
+  if (tab === 'more1') loadFollowups();
+  if (tab === 'more2') fillExportSelect();
+  if (tab === 'users' && hasPerm('admin.users')) { loadPending(); loadAllUsers(); }
+  if (tab === 'roles' && hasPerm('admin.roles')) { loadPermissions(); loadRoles(); }
+  if (tab === 'log' && hasPerm('admin.audit')) loadAuditLog();
+  if (tab === 'sys') {
+    if (hasPerm('admin.llm') && !cfgLoaded) loadLlmConfig();
+  }
+  if (tab === 'profile') { fillProfile(); }
+}
+
+/* ---- admin data ---- */
+let cfgLoaded = false;
+async function loadAdminData() {
+  if (hasPerm('admin.users')) { loadPending(); loadAllUsers(); }
+  if (hasPerm('admin.roles')) { loadPermissions(); loadRoles(); }
+  if (hasPerm('admin.llm') && !cfgLoaded) loadLlmConfig();
+}
+async function loadPending() {
+  try {
+    const d = await api('/admin/pending-users');
+    $('pendingCount').textContent = d.users.length;
+    $('pendingList').innerHTML = d.users.length
+      ? d.users.map(u => `<div class="kv" style="flex-wrap:wrap">
+          <span>${esc(u.display_name||'')} ${esc(u.username)}</span>
+          <span>
+            <select id="apRole_${u.uid}" class="sm" style="width:auto;padding:4px 6px;display:inline-block">
+              <option value="viewer">${t('role_viewer')}</option>
+              <option value="operator">${t('role_operator')}</option>
+            </select>
+            <button class="sm" onclick="approve(${u.uid})">${t('approve')}</button>
+            <button class="warn sm" onclick="reject(${u.uid})">${t('reject')}</button>
+          </span></div>`).join('')
+      : `<div class="muted">${t('no_pending')}</div>`;
+  } catch (e) { toast(errText(e.message)); }
+}
+async function approve(uid) {
+  const role = ($('apRole_' + uid) || {}).value || 'viewer';
+  try { await api(`/admin/users/${uid}/approve`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({role})});
+        toast(t('toast_approved')); loadPending(); loadAllUsers(); }
+  catch (e) { toast(errText(e.message)); }
+}
+async function reject(uid) {
+  try { await api(`/admin/users/${uid}/reject`, {method:'POST'}); toast(t('toast_rejected')); loadPending(); }
+  catch (e) { toast(errText(e.message)); }
+}
+async function loadAllUsers() {
+  try {
+    const d = await api('/admin/users');
+    $('allUserList').innerHTML = d.users.map(u => `<div class="item">
+      <div class="row"><span><span class="code">${esc(u.username)}</span> ${esc(u.display_name||'')}</span>
+        <button class="ghost sm" onclick="openAssign(${u.uid},'${esc(u.username)}',${JSON.stringify(u.roles||[]).replace(/"/g,'&quot;')})" data-i18n="assign_roles_title">分配角色</button></div>
+      <div style="font-size:12px;color:#6b7482;margin-top:3px">
+        <span class="badge ${u.status==='active'?'b-checked':'b-queue'}">${esc(t('st_'+u.status)||u.status)}</span>
+        ${(u.roles||[]).map(r=>`<span class="badge b-role">${esc(roleName(r))}</span>`).join('')}
+      </div></div>`).join('');
+  } catch (e) { toast(errText(e.message)); }
+}
+function openAssign(uid, username, roles) {
+  assignUid = uid;
+  $('assignWho') && ($('assignWho').textContent = username);
+  $('assignBox').classList.remove('hide');
+  $('assignChecks').innerHTML = allRoles.map(r =>
+    `<label><input type="checkbox" value="${esc(r.name)}" ${(roles||[]).includes(r.name)?'checked':''}> ${esc(roleName(r.name))}${r.is_system?' ('+t('builtin')+')':''}</label>`).join('');
+  $('assignBox').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function closeAssign() { assignUid = null; $('assignBox').classList.add('hide'); }
+async function saveUserRoles() {
+  if (!assignUid) return;
+  const roles = Array.from($('assignChecks').querySelectorAll('input:checked')).map(x=>x.value);
+  try { await api(`/admin/users/${assignUid}/roles`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({roles})});
+        toast(t('toast_roles_updated')); closeAssign(); loadAllUsers(); }
+  catch (e) { toast(errText(e.message)); }
+}
+
+/* ---- role management ---- */
+async function loadPermissions() {
+  try { allPerms = (await api('/admin/permissions')).permissions; }
+  catch (e) { toast(errText(e.message)); }
+}
+async function loadRoles() {
+  try {
+    allRoles = (await api('/admin/roles')).roles;
+    $('rolesList').innerHTML = allRoles.map(r => `<div class="item">
+      <div class="row"><span><b>${esc(roleName(r.name))}</b> <span class="muted">${esc(r.name)}</span>
+        ${r.is_system?`<span class="badge b-queue">${t('builtin')}</span>`:''}${r.is_superuser?' <span class="badge b-action">superuser</span>':''}</span>
+        <span>${r.is_system?'':`<button class="ghost sm" onclick="editRole(${r.id})">${t('edit_role')}</button>
+          <button class="warn sm" onclick="delRole(${r.id})">${t('reject')}</button>`}</span></div>
+      <div style="margin-top:4px">${r.permissions.map(p=>`<span class="badge b-perm">${esc(permName(p))}</span>`).join('')}</div>
+      <div class="pages">${t('members')}: ${r.member_count}</div></div>`).join('');
+  } catch (e) { toast(errText(e.message)); }
+}
+function openRoleForm() {
+  editingRoleId = null;
+  $('roleFormTitle').textContent = t('new_role');
+  ['roleName','roleLabelZh','roleLabelEn','roleDesc'].forEach(id=>$(id).value='');
+  $('roleName').disabled = false;
+  $('rolePermChecks').innerHTML = allPerms.map(p =>
+    `<label><input type="checkbox" value="${esc(p.code)}"> ${esc(permName(p.code))}</label>`).join('');
+  $('roleFormBox').classList.remove('hide');
+  $('roleFormBox').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function editRole(rid) {
+  const r = allRoles.find(x=>x.id===rid); if (!r) return;
+  editingRoleId = rid;
+  $('roleFormTitle').textContent = t('edit_role') + ': ' + r.name;
+  $('roleName').value = r.name; $('roleName').disabled = true;
+  $('roleLabelZh').value = r.label_zh; $('roleLabelEn').value = r.label_en; $('roleDesc').value = r.description||'';
+  $('rolePermChecks').innerHTML = allPerms.map(p =>
+    `<label><input type="checkbox" value="${esc(p.code)}" ${r.permissions.includes(p.code)?'checked':''}> ${esc(permName(p.code))}</label>`).join('');
+  $('roleFormBox').classList.remove('hide');
+  $('roleFormBox').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function closeRoleForm() { editingRoleId = null; $('roleFormBox').classList.add('hide'); }
+async function saveRole() {
+  const perms = Array.from($('rolePermChecks').querySelectorAll('input:checked')).map(x=>x.value);
+  const payload = {name:$('roleName').value.trim(), label_zh:$('roleLabelZh').value.trim(),
+    label_en:$('roleLabelEn').value.trim(), description:$('roleDesc').value.trim(), permissions:perms};
+  try {
+    if (editingRoleId) await api('/admin/roles/'+editingRoleId, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    else await api('/admin/roles', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    toast(t('toast_role_saved')); closeRoleForm(); loadRoles();
+  } catch (e) { toast(errText(e.message)); }
+}
+async function delRole(rid) {
+  if (!await uiConfirm(t('confirm_del_role'))) return;
+  try { await api('/admin/roles/'+rid, {method:'DELETE'}); toast(t('toast_role_deleted')); loadRoles(); loadAllUsers(); }
+  catch (e) { toast(errText(e.message)); }
+}
+
+/* ---- LLM config ---- */
+async function loadLlmConfig() {
+  try {
+    const c = await api('/admin/llm-config');
+    $('cfgBaseUrl').value = c.base_url || '';
+    $('cfgModel').value = c.model || '';
+    $('cfgVision').value = c.model_vision || '';
+    $('cfgTimeout').value = c.timeout || 300;
+    $('cfgMaxTokens').value = c.max_tokens || 8192;
+    $('cfgEnabled').checked = !!c.enabled;
+    $('cfgKey').value = c.has_key ? (t('cfg_keep_key')) : '';
+    $('cfgKey').dataset.masked = c.has_key ? '1' : '';
+    $('cfgStatus').textContent = c.has_key ? '' : t('cfg_not_set');
+    // "Saved = system parameter": show exactly what every subsequent job will use.
+    const on = !!c.effective;
+    $('cfgEffective').innerHTML = `
+      <span class="badge ${on ? 'b-checked' : 'b-action'}">${esc(t(on ? 'cfg_effective' : 'cfg_pending'))}</span>
+      <div class="cfgdline">${esc(c.model || '-')} @ ${esc(c.base_url || '-')}</div>
+      <div class="cfgdline muted">${esc(t('cfg_source'))} · ${esc(t('cfg_updated'))} ${esc(fmtTime(c.updated_at))}
+        ${c.updated_by ? ' · ' + esc(t('cfg_by')) + ' ' + esc(c.updated_by) : ''}</div>
+      <div class="cfgdline muted">${esc(t('cfg_refresh'))}</div>`;
+    cfgLoaded = true;
+  } catch (e) { toast(errText(e.message)); }
+}
+async function saveLlmConfig() {
+  const keyVal = $('cfgKey').value.trim();
+  const payload = {
+    base_url: $('cfgBaseUrl').value.trim(), model: $('cfgModel').value.trim(),
+    model_vision: $('cfgVision').value.trim(), enabled: $('cfgEnabled').checked,
+    // Must be sent explicitly: the API defaults a missing timeout to 120s, so
+    // omitting it here silently reset a 300s setting back to 120 on every save.
+    timeout: parseInt($('cfgTimeout').value, 10) || 300,
+    max_tokens: parseInt($('cfgMaxTokens').value, 10) || 8192,
+    api_key: (keyVal.startsWith('****') || $('cfgKey').dataset.masked === '1' && keyVal === t('cfg_keep_key')) ? '****' : keyVal
+  };
+  try {
+    await api('/admin/llm-config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    toast(t('cfg_saved')); loadLlmConfig();
+  } catch (e) { toast(t('cfg_save_fail') + errText(e.message)); }
+}
+async function testLlmConfig() {
+  toast(t('cfg_testing'));
+  try {
+    const r = await api('/admin/llm-config/test', {method:'POST'});
+    toast(r.ok ? (t('cfg_ok') + ' · ' + (r.model || '')) : (t('cfg_fail') + (r.error || '')));
+  } catch (e) { toast(t('cfg_fail') + errText(e.message)); }
+}
+
+/* ---- contracts ---- */
+function pickStatus(el) {
+  document.querySelectorAll('#statusTabs .tab').forEach(x => x.classList.remove('on'));
+  el.classList.add('on'); statusFilter = el.dataset.st; loadContracts(false);
+}
+async function loadContracts(archived) {
+  archived = !!archived;
+  if (!hasPerm(archived ? 'contract.archive_view' : 'contract.view')) return;
+  clearTimeout(pollTimer); pollTimer = null;
+  try {
+    const p = new URLSearchParams();
+    if (!archived && statusFilter) p.set('status', statusFilter);
+    const q = archived ? archiveQ : searchQ;
+    if (q) p.set('q', q);
+    const qs = p.toString();
+    const d = await api((archived ? '/contracts/archived' : '/contracts') + (qs ? '?' + qs : ''));
+    workerKnown = !!(d.worker && typeof d.worker.alive === 'boolean');
+    workerOnline = workerKnown && d.worker.alive;
+    (archived ? $('archivedList') : $('contractList')).innerHTML = d.contracts.length ? d.contracts.map(c => `
+      <div class="item" onclick="openDetail('${esc(c.contract_no)}')">
+        <div class="row"><span><span class="code">${esc(c.contract_no)}</span>
+          ${statusBadge(c)}${c.report_edited_at ? `<span class="badge b-unclear">${esc(t('edited_tag'))}</span>` : ''}${c.archived_at ? `<span class="badge b-queue">${esc(t('archived_tag'))}</span>` : ''}${visBadge(c.visibility)}</span>
+          <span class="muted">›</span></div>
+        <div style="font-size:14px;margin-top:4px">${esc(c.property_address || c.address || t('no_address'))}</div>
+        <div class="pages">${t('risk_items')} ${c.risk_count} · ${esc(String(c.created_at).slice(0,16).replace('T',' '))}${
+          c.is_mine === false ? ' · ' + esc(t('vis_by') + (c.owner_name || '-')) : ''}</div>
+      </div>`).join('') : `<div class="empty">${q ? t('no_result') : t('no_contracts')}</div>`;
+    // Keep the list fresh while any live contract is still being analysed.
+    if (!archived && d.contracts.some(c => c.status === 'queued' || c.status === 'analyzing')) {
+      pollTimer = setTimeout(() => { if (currentTab === 'query' && !currentContract) loadContracts(false); }, 5000);
+    }
+  } catch (e) { toast(errText(e.message)); }
+}
+function onSearch() {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => { searchQ = $('searchBox').value.trim(); loadContracts(false); }, 320);
+}
+function onArchiveSearch() {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => { archiveQ = $('archiveSearchBox').value.trim(); loadContracts(true); }, 320);
+}
+/* 可见性：只有上传者能改，别人看到的是只读徽章 + 上传者名字 */
+function renderVisibility(c) {
+  if (!c) return;
+  const shared = c.visibility !== 'private';
+  const isMine = c.is_mine !== false;
+  $('visRow').classList.remove('hide');
+  $('visBadge').className = 'badge ' + (shared ? 'b-checked' : 'b-na');
+  $('visBadge').textContent = shared ? t('vis_shared_tag') : t('vis_private_tag');
+  $('visOwner').textContent = isMine ? '' : t('vis_by') + (c.owner_name || '-');
+  const tog = $('visToggle');
+  tog.style.display = isMine ? '' : 'none';
+  tog.textContent = isMine ? (shared ? t('vis_make_private') : t('vis_make_shared')) : '';
+}
+async function toggleVisibility() {
+  if (!currentDetail) return;
+  const c = currentDetail.contract;
+  const next = c.visibility === 'private' ? 'shared' : 'private';
+  try {
+    const r = await api('/contracts/' + encodeURIComponent(c.contract_no) + '/visibility',
+      {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({visibility:next})});
+    c.visibility = r.visibility;
+    renderVisibility(c);
+    toast(t(r.visibility === 'private' ? 'toast_vis_private' : 'toast_vis_shared'));
+  } catch (e) { toast(errText(e.message)); }
+}
+const STAGE_PCT = {S0:8, S1:18, S2:26, S3:58, S4:70, S5:84, S6:92, S7:97};
+function renderJob(d) {
+  const box = $('detailJob'); const c = d.contract; const jobs = d.jobs || []; const job = jobs[0];
+  $('retryBtn').classList.toggle('hide', !hasPerm('contract.upload'));
+  $('delBtn').classList.toggle('hide', !hasPerm('contract.upload'));
+  // Editing needs contract.edit; the checklist is only editable once a report exists.
+  $('editContractBtn').classList.toggle('hide',
+    !hasPerm('contract.edit') || !$('contractEditCard').classList.contains('hide'));
+  const archived = !!(currentDetail && currentDetail.contract && currentDetail.contract.archived_at);
+  $('addItemBtn').classList.toggle('hide', !(hasPerm('contract.edit') && d.report && !archived));
+  if (!job) { box.innerHTML = `<div class="muted">${t('job_none')}</div>`; return; }
+
+  const hasWorkerInfo = !!(d.worker && typeof d.worker.alive === 'boolean');
+  const alive = hasWorkerInfo && d.worker.alive;
+  const stallSec = d.stall_seconds || 600;
+  const age = (job.stage_age_seconds === undefined) ? null : job.stage_age_seconds;
+  // 停滞只看「阶段多久没动」：阶段还在动 = 真的在等模型返回。
+  // 心跳（alive）只用来回答「排队中的活有没有人在等」，不参与分析中的判断，
+  // 否则一次较长的模型调用就会被误报成掉线。
+  const stalled = job.status === 'analyzing' && age !== null && age !== undefined && age > stallSec;
+  const retry = $('retryBtn');
+  retry.disabled = job.status === 'queued' || (job.status === 'analyzing' && !stalled);
+  retry.textContent = stalled ? t('retry_force') : t('retry_analysis');
+
+  if (job.status === 'queued') {
+    // 绝不画 4% 的假进度条：这里根本没有「进度」，只有「有没有人在等这份活」。
+    if (!hasWorkerInfo) {
+      box.innerHTML = `<div class="okbox"><b>${esc(t('job_queued'))}</b></div>`;
+    } else if (alive) {
+      box.innerHTML = `<div class="okbox"><b>${esc(t('job_queued'))}</b><div style="margin-top:4px">${esc(t('job_queued_alive'))}</div></div>`;
+    } else {
+      box.innerHTML = `<div class="warnbox"><b>${esc(t('st_queued_off'))}</b><div style="margin-top:4px">${esc(t('job_queued_off'))}</div></div>`;
+    }
+    return;
+  }
+  if (job.status === 'analyzing') {
+    const pct = STAGE_PCT[job.stage] || 10;
+    const stageName = t('stage_' + (job.stage || '')) || t('st_processing');
+    const ago = fmtAgo(age);
+    box.innerHTML = `<div class="prog">
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="lbl"><span>${esc(stageName)}${job.stage_msg ? ' · ' + esc(job.stage_msg) : ''}</span><span>${pct}%</span></div>
+      </div>
+      <div class="muted" style="margin-top:6px">${esc(t('job_running'))}${ago ? ' · ' + esc(t('job_updated')) + ' ' + esc(ago) : ''}</div>
+      ${stalled ? `<div class="warnbox">${esc(t('job_no_progress'))} ${age ? Math.round(age / 60) : ''} ${esc(t('job_stalled'))}</div>` : ''}`;
+    return;
+  }
+  if (job.status === 'failed') {
+    box.innerHTML = `<div class="errbox"><b>${esc(t('st_failed'))}</b>
+        ${job.error_code ? ' · ' + esc(job.error_code) : ''}<br>${esc(job.error_msg || '')}
+      </div><div class="muted" style="margin-top:6px">${esc(t('job_failed_hint'))}</div>`;
+    return;
+  }
+  if (job.status === 'awaiting_llm') {
+    box.innerHTML = `<div class="warnbox">${esc(t('st_awaiting_llm'))} — ${esc(t('job_awaiting_hint'))}</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="muted">${esc(t('job_title'))} · ${esc(t('st_' + job.status) || job.status)}
+      ${job.finished_at ? ' · ' + esc(String(job.finished_at).slice(0,16).replace('T',' ')) : ''}</div>`;
+}
+async function retryContract() {
+  if (!currentContract) return;
+  // 只有「分析中但停住了」才需要 force：后端会拒绝顶掉一个真正活着的任务。
+  const job = (currentDetail && currentDetail.jobs && currentDetail.jobs[0]) || {};
+  const report = (currentDetail && currentDetail.report) || {};
+  const force = job.status === 'analyzing';
+  if (!await uiConfirm(t(force ? 'confirm_retry_force' : 'confirm_retry'))) return;
+  // 人工改过的报告要多问一次：重新分析生成的是全新版本，编辑不会带过去。
+  let confirmEdited = false;
+  if (report.is_edited) {
+    if (!await uiConfirm(t('confirm_retry_edited'), true)) return;
+    confirmEdited = true;
+  }
+  const qs = [];
+  if (force) qs.push('force=1');
+  if (confirmEdited) qs.push('confirm=1');
+  try {
+    await api('/contracts/' + encodeURIComponent(currentContract) + '/retry' + (qs.length ? '?' + qs.join('&') : ''),
+      {method:'POST'});
+    toast(t('toast_retried'));
+    await openDetail(currentContract, true);
+  } catch (e) {
+    if (String(e.message).includes('REPORT_EDITED_CONFIRM_REQUIRED'))
+      return toast(t('toast_retry_edited_blocked'));
+    toast(errText(e.message));
+  }
+}
+async function deleteContract() {
+  if (!currentContract) return;
+  if (!await uiConfirm(t('confirm_delete'))) return;
+  const no = currentContract;
+  try {
+    await api('/contracts/' + encodeURIComponent(no), {method:'DELETE'});
+    toast(t('toast_deleted'));
+    closeDetail(); loadContracts(currentTab === 'archived');
+  } catch (e) { toast(t('toast_del_fail') + errText(e.message)); }
+}
+async function doUpload() {
+  const f = $('fileInput').files[0];
+  if (!f) return toast(t('toast_need_file'));
+  if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') return toast(t('toast_only_pdf'));
+  $('uploadBtn').disabled = true; $('uploadBtn').textContent = t('toast_uploading');
+  try {
+    const fd = new FormData(); fd.append('file', f);
+    fd.append('visibility', ($('uploadVis') && $('uploadVis').value) || 'shared');
+    const d = await api('/contracts', {method:'POST', body:fd});
+    toast((d.duplicate ? t('toast_dup') : t('toast_upload_ok')) + d.contract_no);
+    $('fileInput').value = '';
+    // Jump to the query tab and open the new case so progress is visible at once.
+    pickTab('query');
+    openDetail(d.contract_no);
+  } catch (e) { toast(t('toast_upload_fail') + errText(e.message)); }
+  finally { $('uploadBtn').disabled = false; $('uploadBtn').textContent = t('upload_btn'); }
+}
+async function openDetail(no, quiet) {
+  currentContract = no; currentSection = quiet ? currentSection : 'A';
+  clearTimeout(detailTimer); detailTimer = null;
+  $('listCard').classList.add('hide');
+  $('archivedCard').classList.add('hide');
+  $('detailView').classList.remove('hide');
+  $('detailTitle').textContent = no;
+  try {
+    const d = await api('/contracts/' + encodeURIComponent(no));
+    currentDetail = d;
+    const c = d.contract;
+    const archived = !!c.archived_at;
+    const addrText = c.property_address || (c.address && !/\.pdf$/i.test(c.address) ? c.address : t('no_address'));
+    renderVisibility(c);
+    $('detailAddr').textContent = addrText;
+    $('detailBadges').innerHTML = statusBadge(c) +
+      (d.report && d.report.is_edited ? `<span class="badge b-unclear">${esc(t('edited_tag'))}</span>` : '') +
+      (archived ? `<span class="badge b-queue">${esc(t('archived_tag'))}</span>` : '');
+    const kv = (k,v) => `<div class="kv"><span class="k">${k}</span><span class="v">${esc(v||'-')}</span></div>`;
+    $('infoMeta').innerHTML =
+      (archived ? `<p class="muted" style="margin:0 0 8px">${esc(t('archive_note'))}</p>` : '') +
+      kv(t('kv_property'), addrText) +
+      kv(t('kv_title'), [c.title_volume && 'Vol '+c.title_volume, c.title_folio && 'Fol '+c.title_folio].filter(Boolean).join(' / ')) +
+      kv(t('kv_lot'), [c.lot_number && 'Lot '+c.lot_number, c.plan_number && 'LP '+c.plan_number].filter(Boolean).join(' / ')) +
+      kv(t('kv_owner'), c.registered_owner) + kv(t('kv_area'), c.land_area_sqm ? c.land_area_sqm + ' ' + t('sqm') : '') +
+      kv(t('kv_council'), c.council_rates_amt ? '$'+c.council_rates_amt : '') +
+      kv(t('kv_water'), c.water_charges_amt ? '$'+c.water_charges_amt : '') +
+      (d.report ? kv(t('kv_report'), overallLabel(d.report.overall_status)) +
+        (d.report.is_edited ? kv(t('kv_edited'), fmtTime(d.report.edited_at)) : '')
+        : `<div class="muted" style="margin-top:8px">${t('report_none')}</div>`);
+    $('dlReport').disabled = !d.report;
+    $('dlEditedReport').disabled = !(d.report && d.report.is_edited);
+    document.querySelectorAll('#dlOriginal,#dlReport').forEach(b=>b.classList.toggle('hide', !hasPerm('contract.download')));
+    $('dlEditedReport').classList.toggle('hide',
+      !hasPerm('contract.download') || !(d.report && d.report.is_edited));
+    // Archived contracts are read-only: hide every mutating action.
+    $('retryBtn').classList.toggle('hide', archived || !hasPerm('contract.upload'));
+    $('delBtn').classList.toggle('hide', archived || !hasPerm('contract.upload'));
+    $('editContractBtn').classList.toggle('hide', archived || !hasPerm('contract.edit'));
+    $('archiveBtn').classList.toggle('hide', !hasPerm('contract.archive'));
+    $('archiveBtn').textContent = t(archived ? 'restore_contract' : 'archive_contract');
+    renderJob(d);
+    // --- KPIs: status / open risks / follow-ups / report version ---
+    const rep = d.report;
+    const kpis = [
+      [t('kpi_status'), t('st_' + c.status) || c.status, false],
+      [t('kpi_risks'), rep ? (rep.risk_count || 0) : '-', !!(rep && rep.risk_count > 0)],
+      [t('kpi_followups'), rep ? (rep.followup_count || 0) : '-', !!(rep && rep.followup_count > 0)],
+      [t('kpi_version'), rep ? 'v' + rep.version : '-', false]
+    ];
+    $('detailKpi').innerHTML = kpis.map(([label, val, hot]) =>
+      `<div class="kpi ${hot ? 'hot' : ''}"><b>${esc(String(val))}</b><span>${esc(label)}</span></div>`).join('');
+    followups = (rep && Array.isArray(rep.followups)) ? rep.followups : [];
+    // audit box only for editors; reset cached content for the new contract
+    $('auditBox').classList.toggle('hide', !hasPerm('contract.edit'));
+    $('auditList').classList.add('hide'); $('auditList').innerHTML = '';
+    delete $('auditList').dataset.loaded;
+    $('auditToggle').textContent = t('show');
+    const active = (d.jobs[0] || {}).status;
+    if (active === 'analyzing' || active === 'queued') {
+      detailTimer = setTimeout(() => { if (currentContract === no) openDetail(no, true); }, 4000);
+    }
+    const meta = Object.fromEntries(d.sections.map(s => [s.section, s]));
+    const fuTab = followups.length
+      ? `<div class="tab ${currentSection === 'FU' ? 'on' : ''}" data-s="FU" title="${esc(t('followups_tab'))}"
+             onclick="pickSection('FU')">⚠ ${followups.length}</div>` : '';
+    const infoTab = `<div class="tab ${currentSection === 'INFO' ? 'on' : ''}" data-s="INFO"
+             title="${esc(t('info_tab'))}" onclick="pickSection('INFO')">${esc(t('info_tab'))}</div>`;
+    $('sectionTabs').innerHTML = infoTab + ['A','B','C','D','E','F','G'].map(s =>
+      `<div class="tab ${s===currentSection?'on':''}" data-s="${s}" title="${esc(t('sec_'+s))}" onclick="pickSection('${s}')">${s}${meta[s]?.risks ? ' ·'+meta[s].risks : ''}</div>`).join('') + fuTab;
+    renderSection();
+    if (!quiet) $('detailView').scrollIntoView({behavior:'smooth', block:'start'});
+  } catch (e) { toast(errText(e.message)); }
+}
+function closeDetail() {
+  clearTimeout(detailTimer); detailTimer = null;
+  $('detailView').classList.add('hide'); $('listCard').classList.remove('hide');
+  $('archivedCard').classList.remove('hide');
+  $('contractEditCard').classList.add('hide');
+  $('itemModal').classList.add('hide');
+  resetItemSearch(); followups = [];
+  currentContract = null; currentDetail = null; currentItems = [];
+}
+function pickSection(s) {
+  currentSection = s;
+  resetItemSearch();
+  document.querySelectorAll('#sectionTabs .tab').forEach(x => x.classList.toggle('on', x.dataset.s === s));
+  renderSection();
+}
+function renderSection() {
+  // "详情" is a first-class tab alongside A–G: the long contract-field block
+  // only renders when that tab is active, so the top of the page stays short.
+  const isInfo = currentSection === 'INFO';
+  $('infoPanel').classList.toggle('hide', !isInfo);
+  $('itemsPanel').classList.toggle('hide', isInfo);
+  if (!isInfo) { if (currentSection === 'FU') renderFollowups(); else loadItems(); }
+  const archived = !!(currentDetail && currentDetail.contract && currentDetail.contract.archived_at);
+  $('addItemBtn').classList.toggle('hide', isInfo || archived ||
+    !hasPerm('contract.edit') || !(currentDetail && currentDetail.report));
+}
+async function toggleArchive() {
+  if (!currentContract || !currentDetail) return;
+  const restoring = !!currentDetail.contract.archived_at;
+  if (!await uiConfirm(t(restoring ? 'confirm_restore' : 'confirm_archive'))) return;
+  try {
+    await api('/contracts/' + encodeURIComponent(currentContract) + '/archive',
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify(restoring ? {restore:true} : {})});
+    toast(t(restoring ? 'toast_restored' : 'toast_archived'));
+    if (restoring) await openDetail(currentContract, true);
+    else { closeDetail(); loadContracts(currentTab === 'archived'); }
+  } catch (e) { toast(errText(e.message)); }
+}
+function resetItemSearch() {
+  itemQ = ''; clearTimeout(itemQTimer); itemQTimer = null;
+  $('itemSearch').value = '';
+  $('searchClear').classList.add('hide');
+}
+function onItemSearch() {
+  const v = $('itemSearch').value.trim();
+  $('searchClear').classList.toggle('hide', !v);
+  clearTimeout(itemQTimer);
+  itemQTimer = setTimeout(() => {
+    itemQ = v;
+    document.querySelectorAll('#sectionTabs .tab').forEach(x => x.classList.remove('on'));
+    loadItems();
+  }, 280);
+}
+function clearItemSearch() {
+  resetItemSearch();
+  document.querySelectorAll('#sectionTabs .tab').forEach(x => x.classList.toggle('on', x.dataset.s === currentSection));
+  if (currentSection === 'FU') renderFollowups(); else loadItems();
+}
+// escape first, then mark matches, so stored HTML can never be injected
+/* ---- 条目正文：按 PDF 的排版还原（粗体词 / 行首小标题 / 逐行分段）----
+   PDF 里 contents 的写法是 <b>MATCH</b> 这类内联标记 + 行首 "标签：" 自动加粗，
+   报告怎么排，列表就怎么排；除此之外一律转义，不放开其它标签。 */
+const RICH_TAG_RE = /&lt;(\/?)(b|strong|i|em)&gt;/gi;
+function escapeRich(raw) {
+  // 模型 JSON 里的 & 已按报告渲染器要求写成 &amp;，先还原再统一转义，否则界面上会出现 &amp;amp;
+  const decoded = String(raw == null ? '' : raw)
+    .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"').replace(/&#39;/g, "'").replace(/&nbsp;/gi, ' ');
+  return esc(decoded).replace(RICH_TAG_RE, (m, close, tag) => {
+    const t = tag.toLowerCase();
+    return '<' + close + (t === 'strong' ? 'b' : t === 'em' ? 'i' : t) + '>';
+  });
+}
+// 行首 "Property consistency:" 这类短标签加粗（与 build_review_report.bold_lead 同规则）
+function leadBold(html, alreadyMarked) {
+  if (alreadyMarked) return html;
+  // 列表符号不参与加粗（PDF 也是「- <b>标签:</b> 内容」）
+  const bm = /^([-•*]\s+)/.exec(html);
+  const head = bm ? bm[1] : '';
+  const body = html.slice(head.length);
+  const plain = body.replace(/<[^>]*>/g, '');
+  const m = /^([^:：]{1,48})[:：]/.exec(plain);
+  if (!m) return html;
+  const label = m[1];
+  if (label.split(/\s+/).filter(Boolean).length > 6) return html;
+  if (!body.startsWith(label + ':') && !body.startsWith(label + '：')) return html;   // 标签前已有内联标记，交给模型控制
+  const sep = body.charAt(label.length);          // 保留原冒号（中文行用全角）
+  return head + '<b>' + label + sep + '</b>' + body.slice(label.length + 1);
+}
+function richLine(raw) {
+  const s = String(raw == null ? '' : raw);
+  return leadBold(escapeRich(s), s.trim().startsWith('<'));
+}
+// 搜索高亮只作用在文本片段上，绝不改写标签本身
+function hlRich(raw) {
+  const html = richLine(raw);
+  if (!itemQ) return html;
+  let re;
+  try { re = new RegExp(itemQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'); }
+  catch (e) { return html; }
+  return html.split(/(<[^>]+>)/).map(seg =>
+    seg.charAt(0) === '<' ? seg : seg.replace(re, m => `<mark>${m}</mark>`)).join('');
+}
+function contentsLines(it) {
+  const arr = it && it.contents_json;
+  if (Array.isArray(arr) && arr.length) return arr;
+  return String((it && it.contents_text) || '').split('\n').filter(x => x.trim());
+}
+// 纯文本（条目标题等）的转义 + 搜索高亮
+function hl(text) {
+  const s = esc(text || '');
+  if (!itemQ) return s;
+  try {
+    const q = itemQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return s.replace(new RegExp(q, 'gi'), m => `<mark>${m}</mark>`);
+  } catch (e) { return s; }
+}
+// 导出为纯文本时用：保留换行，但去掉一切标记
+function plainText(raw) {
+  return escapeRich(raw).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+}
+function renderFollowups() {
+  currentItems = [];
+  if (!followups.length) { $('itemsBox').innerHTML = `<div class="empty">${t('no_followups')}</div>`; return; }
+  $('itemsBox').innerHTML = followups.map((f, idx) => `
+    <div class="fu">
+      <h4>${idx + 1}. ${esc(f.matter || '')}</h4>
+      ${(f.finding || []).length ? `<ul>${f.finding.map(x => `<li>${escapeRich(x)}</li>`).join('')}</ul>` : ''}
+      ${(f.action || []).length ? `<ul>${f.action.map(x => `<li>${escapeRich(x)}</li>`).join('')}</ul>` : ''}
+      ${f.pages ? `<div class="pgs">${esc(t('pages'))}: ${esc(f.pages)}</div>` : ''}
+    </div>`).join('');
+}
+function invalidateAudit() {
+  const list = $('auditList');
+  list.innerHTML = ''; delete list.dataset.loaded;
+  if (!list.classList.contains('hide')) toggleAudit();
+}
+async function toggleAudit() {
+  const list = $('auditList'), btn = $('auditToggle');
+  if (!list.classList.contains('hide')) {
+    list.classList.add('hide'); btn.textContent = t('show'); return;
+  }
+  list.classList.remove('hide'); btn.textContent = t('hide');
+  if (list.dataset.loaded) return;
+  try {
+    const d = await api('/contracts/' + encodeURIComponent(currentContract) + '/audit');
+    const act = {edit_contract: t('audit_edit_contract'), edit_item: t('audit_edit_item'),
+                 add_item: t('audit_add_item')};
+    const desc = l => {
+      const x = l.detail || {};
+      const label = k => t(({
+        property_address:'fld_address', address:'fld_address', title_volume:'fld_title_vol',
+        title_folio:'fld_title_fol', lot_number:'fld_lot', plan_number:'fld_plan',
+        registered_owner:'fld_owner', land_area_sqm:'fld_area', council_rates_amt:'fld_council',
+        water_charges_amt:'fld_water', provided:'fld_provided', verified:'fld_verified',
+        contents:'fld_contents', notes:'fld_notes', pages:'fld_pages'
+      })[k] || k);
+      if (l.action === 'add_item') return [x.code, x.item].filter(Boolean).join(' · ');
+      const names = Object.keys(x.fields || {}).map(label).join(', ');
+      return (l.action === 'edit_item' ? '#' + (x.item_id || '') + ' ' : '') + names;
+    };
+    list.innerHTML = d.logs.length ? d.logs.map(l => `
+      <div class="auditrow"><b>${esc(act[l.action] || l.action)}</b> · ${esc(l.actor || '')}
+        · ${esc(fmtTime(l.created_at))}<br>${esc(desc(l))}</div>`).join('')
+      : `<div class="empty">${t('no_audit')}</div>`;
+    list.dataset.loaded = '1';
+  } catch (e) { list.innerHTML = `<div class="empty">${esc(errText(e.message))}</div>`; }
+}
+function fmtTime(iso) {
+  if (!iso) return '-';
+  try {
+    return new Date(iso).toLocaleString(LANG === 'zh' ? 'zh-CN' : 'en-AU',
+      {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+  } catch (e) { return iso; }
+}
+async function loadItems() {
+  try {
+    const qs = itemQ ? '?q=' + encodeURIComponent(itemQ) : '?section=' + currentSection;
+    const d = await api('/contracts/' + encodeURIComponent(currentContract) + '/items' + qs);
+    currentItems = d.items || [];
+    const canEdit = hasPerm('contract.edit') && !!(currentDetail && currentDetail.report);
+    const head = itemQ
+      ? `<div class="muted" style="margin:0 0 8px">${esc(t('search_hits'))}: ${currentItems.length}</div>` : '';
+    $('itemsBox').innerHTML = head + (currentItems.length ? currentItems.map(i => `
+      <div class="item">
+        <div class="item-head"><span class="code">${esc(i.code)}</span>${hl(i.item)}</div>
+        <div class="item-badges">
+          ${provBadge(i.provided)}${badge(i.verified)}
+          ${canEdit ? `<button class="ghost sm" style="margin-left:auto" onclick="openItemModal(${i.id})">${esc(t('btn_edit'))}</button>` : ''}
+        </div>
+        <div class="txt">${contentsLines(i).map(l => `<p>${hlRich(l)}</p>`).join('')}</div>
+        <div class="pages">${(i.pages||[]).slice(0,10).join(' · ')}${i.notes ? '　|　'+esc(i.notes) : ''}</div>
+      </div>`).join('') : `<div class="empty">${t('no_items')}</div>`);
+  } catch (e) { toast(errText(e.message)); }
+}
+
+/* ---- contract field editing (contract.edit) ---- */
+const CF_FIELDS = [
+  ['cfPropertyAddress','property_address','text'],
+  ['cfTitleVolume','title_volume','text'], ['cfTitleFolio','title_folio','text'],
+  ['cfLotNumber','lot_number','text'], ['cfPlanNumber','plan_number','text'],
+  ['cfRegisteredOwner','registered_owner','text'],
+  ['cfLandArea','land_area_sqm','num'], ['cfCouncil','council_rates_amt','num'],
+  ['cfWater','water_charges_amt','num']
+];
+function toggleContractEdit(force) {
+  const card = $('contractEditCard');
+  const open = force === undefined ? card.classList.contains('hide') : !!force;
+  card.classList.toggle('hide', !open);
+  $('editContractBtn').classList.toggle('hide', open || !hasPerm('contract.edit'));
+  if (open) fillContractEdit();
+}
+function fillContractEdit() {
+  const c = currentDetail && currentDetail.contract;
+  if (!c) return;
+  CF_FIELDS.forEach(([id, key]) => { $(id).value = (c[key] === null || c[key] === undefined) ? '' : c[key]; });
+  const running = ((currentDetail.jobs || [])[0] || {}).status;
+  const active = running === 'queued' || running === 'analyzing';
+  $('editWarn').textContent = active ? t('edit_warn_running') : '';
+}
+function numOrNull(raw) {
+  const s = String(raw || '').replace(/[,$\s]/g, '').trim();
+  if (!s) return null;
+  if (!/^-?\d+(\.\d+)?$/.test(s)) throw new Error(t('err_NotNumber'));
+  return s;
+}
+async function saveContractFields() {
+  if (!currentContract) return;
+  const payload = {};
+  try {
+    CF_FIELDS.forEach(([id, key, kind]) => {
+      const v = $(id).value.trim();
+      payload[key] = kind === 'num' ? numOrNull(v) : (v || null);
+    });
+  } catch (e) { return toast(e.message); }
+  try {
+    await api('/contracts/' + encodeURIComponent(currentContract), {method:'PUT',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    toast(t('toast_saved'));
+    await openDetail(currentContract, true);
+    toggleContractEdit(false);
+    loadContracts(currentTab === 'archived');   // keep the cached list in sync with the new values
+  } catch (e) { toast(t('toast_save_fail') + errText(e.message)); }
+}
+
+/* ---- item editing: identity is immutable, content is editable ---- */
+function selectOpts(values, prefix, current) {
+  return values.map(v =>
+    `<option value="${v}" ${v === current ? 'selected' : ''}>${esc(t(prefix + v) || v)}</option>`).join('');
+}
+function openItemModal(id) {
+  if (!currentDetail || !currentDetail.report) return toast(t('edit_need_report'));
+  itemMode = id ? 'edit' : 'add';
+  editingItemId = id || null;
+  const it = id ? currentItems.find(x => x.id === id) : null;
+  if (id && !it) return;
+  const lines = it ? (Array.isArray(it.contents_json) ? it.contents_json : [it.contents_text || '']) : [];
+  $('itemModalTitle').textContent = it ? (it.code + ' · ' + t('edit_item')) : t('new_item');
+  $('itemModalBody').innerHTML = it ? `
+      <label>${t('fld_item')}</label>
+      <div class="robox">${esc(it.item)}</div>
+      <p class="muted" style="margin:6px 0 0">${t('item_immutable_hint')}</p>
+      <label>${t('fld_provided')}</label>
+      <select id="imProvided">${selectOpts(PROVIDED_ENUM,'p_',it.provided)}</select>
+      <label>${t('fld_verified')}</label>
+      <select id="imVerified">${selectOpts(VERIFIED_ENUM,'v_',it.verified)}</select>
+      <label>${t('fld_contents')}</label>
+      <textarea id="imContents" rows="7">${esc(lines.join('\n'))}</textarea>
+      <label>${t('fld_notes')}</label>
+      <input type="text" id="imNotes" value="${esc(it.notes || '')}">
+      <label>${t('fld_pages')}</label>
+      <input type="text" id="imPages" value="${esc((it.pages || []).join(', '))}">
+    ` : `
+      <label>${t('fld_section')}</label>
+      <select id="imSection">${SECTIONS.map(s =>
+        `<option value="${s}" ${s === currentSection ? 'selected' : ''}>${esc(t('sec_' + s))}</option>`).join('')}</select>
+      <label>${t('fld_item_new')}</label>
+      <input type="text" id="imItem" placeholder="">
+      <label>${t('fld_code')}</label>
+      <input type="text" id="imCode" placeholder="A12">
+      <label>${t('fld_provided')}</label>
+      <select id="imProvided">${selectOpts(PROVIDED_ENUM,'p_','Present')}</select>
+      <label>${t('fld_verified')}</label>
+      <select id="imVerified">${selectOpts(VERIFIED_ENUM,'v_','Unclear')}</select>
+      <label>${t('fld_contents')}</label>
+      <textarea id="imContents" rows="6"></textarea>
+      <label>${t('fld_notes')}</label>
+      <input type="text" id="imNotes">
+    `;
+  $('itemModal').classList.remove('hide');
+}
+function closeItemModal() {
+  $('itemModal').classList.add('hide');
+  editingItemId = null;
+  $('itemModalBody').innerHTML = '';
+}
+function splitPages(raw) {
+  return String(raw || '').split(/[,，;\s]+/).map(s => s.trim()).filter(Boolean);
+}
+async function saveItem() {
+  if (!currentContract) return;
+  const payload = {
+    provided: $('imProvided').value, verified: $('imVerified').value,
+    contents: $('imContents').value, notes: $('imNotes').value
+  };
+  try {
+    if (itemMode === 'edit') {
+      payload.pages = splitPages(($('imPages') || {}).value);
+      await api('/contracts/' + encodeURIComponent(currentContract) + '/items/' + editingItemId,
+        {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      closeItemModal(); toast(t('toast_saved')); invalidateAudit(); loadItems();
+    } else {
+      payload.section = $('imSection').value;
+      payload.item = $('imItem').value.trim();
+      const code = ($('imCode').value || '').trim().toUpperCase();
+      if (code) payload.code = code;
+      if (!payload.item) return toast(t('need_item'));
+      const r = await api('/contracts/' + encodeURIComponent(currentContract) + '/items',
+        {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      closeItemModal();
+      toast(t('toast_item_added') + r.code);
+      invalidateAudit();
+      if (r.section !== currentSection) pickSection(r.section); else loadItems();
+    }
+    // Refresh the header/edited badge and the "Edited report PDF" button.
+    await openDetail(currentContract, true);
+  } catch (e) { toast(t('toast_save_fail') + errText(e.message)); }
+}
+function download(kind) {
+  if (!currentContract) return;
+  const path = '/api/contracts/' + encodeURIComponent(currentContract) + '/' + kind;
+  // In the APK the shell downloads with the session cookie and hands the file to
+  // the system PDF viewer; in a browser this branch is skipped.
+  const suffix = kind === 'original' ? '_original.pdf'
+    : (kind === 'edited-report' ? '_report_edited.pdf' : '_report.pdf');
+  if (nativeDownload(path, currentContract + suffix)) return;
+  window.location.href = path;
+}
+
+(async function init() {
+  applyLang();
+  try { me = (await api('/auth/me')).user; applyIdentity(); }
+  catch { show('loginView'); }
+})();
+</script>
+</body>
+</html>

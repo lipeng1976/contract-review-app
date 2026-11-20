@@ -1,0 +1,13 @@
+# Normalize to LF in the repository; let git check out with native line endings
+# on Windows, but never let CRLF creep into committed source files.
+* text=auto eol=lf
+
+# Binary files must never be line-ending normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.docx binary
+*.zip binary
