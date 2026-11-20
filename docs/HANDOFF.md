@@ -75,6 +75,15 @@
 - 签名证书丢失后无法给已安装用户做覆盖升级，只能换新包名重装。
 - 生产库改动前先备份 `pgdata` 与 `data/`；`db/purge_contracts.py` 默认 dry-run，执行会先备份文件再删除。
 
+## 5b. 版本控制与移交包
+
+- 本目录已是 git 仓库。基线提交 `1000919`，标签 `v0.8.0-handoff`（2026-11-20 转正版本）。
+  后续所有改动在**本目录**里 `git add/commit`，不要再改已冻结的原目录。
+- `.gitattributes` 固定仓库内 LF 换行；`.gitignore` 排除 `.env`、`data/`、`logs/`、`pgdata/`、
+  `*.keystore`、`*.apk` 等，提交前确认 `git status` 无敏感文件。
+- 根目录的 `contract-review-app-handoff.zip` 是与基线同步的交付包（72 个文件，不含任何
+  密钥与运行时数据）。代码有改动后需从本目录重新打包，保持 zip 与 git 一致。
+
 ## 6. 验收清单（接手后建议逐项跑）
 
 - [ ] `/api/health`：`api=up`、`database=up`、`worker=alive`、`llm_configured=true`
