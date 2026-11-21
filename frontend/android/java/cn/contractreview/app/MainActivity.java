@@ -61,9 +61,9 @@ public class MainActivity extends Activity {
 
     private static final String PREFS = "cr_prefs";
     private static final String KEY_URL = "base_url";
-    // 默认后台地址来自 android/assets/backend-url.txt；出包前按环境替换。
-    // 这样 APK 里不再硬编码某台机器的 IP/域名。
-    private String defaultUrl = "http://10.0.2.2:8790/";   // Android 模拟器 -> 宿主机
+    // 出厂默认后台地址：assets/backend-url.txt 优先；这里是 asset 缺失时的兜底。
+    // 打包前按环境改这两处（assets + 本行），当前为公网地址。
+    private String defaultUrl = "http://8.138.227.136:18790/";
     private final String legacyLanUrl = "";                // 旧版迁移地址留空即关闭迁移
     private static final int REQ_PICK_FILE = 1001;
     private static final String UA_TAG = "ContractReviewApp/1.5";
@@ -666,7 +666,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
             // Missing asset (older APK): keep the emulator default.
         }
-        return "http://10.0.2.2:8790/";
+        return "http://8.138.227.136:18790/";
     }
 
     private String loadUrl() {
