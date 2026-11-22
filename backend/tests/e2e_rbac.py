@@ -1,17 +1,18 @@
 """E2E RBAC: roles, permissions, least-privilege gates, custom roles, hot reload.
-Run against the live backend at http://127.0.0.1:8790 (admin must be admin/Zhouxin1975).
+Run against the live backend at http://127.0.0.1:8790 (admin must be admin/<password from TEST_ADMIN_PASSWORD>).
 """
 import httpx
 import time
 
+from creds import ADMIN, NEW_USER_PASSWORD
+
 BASE = "http://127.0.0.1:8790"
 RUN = str(int(time.time()))[-6:]  # unique suffix so re-runs never collide
-ADMIN = {"username": "admin", "password": "Zhouxin1975"}
+
 CUSTOM_ROLE = f"auditor_{RUN}"
 PDF = "D:/downloads/合同/36 Hinkler Road, Glen Waverley_contract.pdf"
 
 passed = failed = 0
-
 
 def check(name, cond, detail=""):
     global passed, failed
@@ -22,12 +23,10 @@ def check(name, cond, detail=""):
         failed += 1
         print(f"  FAIL {name}  {detail}")
 
-
 def login(username, password):
     c = httpx.Client(base_url=BASE, timeout=30)
     r = c.post("/api/auth/login", json={"username": username, "password": password})
     return c, r
-
 
 def register_and_approve(admin, username, role):
     """Register a fresh account, approve it with `role`, return a logged-in client."""
@@ -36,14 +35,13 @@ def register_and_approve(admin, username, role):
         if u["username"] == username:
             admin.put(f"/api/admin/users/{u['uid']}/roles", json={"roles": ["viewer"]})
     admin.post("/api/auth/register", json={
-        "username": username, "password": "TestRbac2026",
+        "username": username, "password": NEW_USER_PASSWORD,
         "display_name": username, "role": role})
     pend = admin.get("/api/admin/pending-users").json()["users"]
     uid = next(u["uid"] for u in pend if u["username"] == username)
     admin.post(f"/api/admin/users/{uid}/approve", json={"role": role})
-    c, r = login(username, "TestRbac2026")
+    c, r = login(username, NEW_USER_PASSWORD)
     return c, uid
-
 
 def cleanup(admin, username):
     users = admin.get("/api/admin/users").json()["users"]
@@ -54,7 +52,6 @@ def cleanup(admin, username):
             admin.post(f"/api/admin/users/{u['uid']}/suspend")
             return u["uid"]
     return None
-
 
 def main():
     global passed, failed
@@ -169,7 +166,6 @@ def main():
     print(f"\n=== RESULT: {passed} passed, {failed} failed ===")
     if failed:
         raise SystemExit(1)
-
 
 if __name__ == "__main__":
     main()

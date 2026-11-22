@@ -18,8 +18,10 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
+from creds import MEMBER
+
 BASE = "http://127.0.0.1:8790"
-MEMBER = {"username": "member.alpha", "password": "TestMember2026"}
+
 CONTRACT = "CT-20261118-Q8WQC4"
 MODEL = ROOT.parent / "_work/hinkler/model_v3.json"
 
@@ -30,7 +32,6 @@ def check(label, cond, detail=""):
     print(f"[{'PASS' if cond else 'FAIL'}] {label}" + (f" :: {detail}" if detail else ""))
     if not cond:
         raise SystemExit(1)
-
 
 def main():
     # Reset the contract's job to queued, then run the worker in replay mode.
@@ -75,7 +76,6 @@ def main():
     check("report PDF downloadable", rep.status_code == 200 and rep.content[:5] == b"%PDF-",
           f"{rep.status_code} {len(rep.content)} bytes")
     print(f"\nALL {ok} M2 CHECKS PASSED")
-
 
 if __name__ == "__main__":
     main()

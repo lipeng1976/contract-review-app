@@ -23,13 +23,13 @@ import time
 
 import httpx
 
+from creds import ADMIN, EDITOR
+
 BASE = "http://127.0.0.1:8790"
-ADMIN = {"username": "admin", "password": "Zhouxin1975"}
-EDITOR = {"username": "member.alpha", "password": "TestMember2026"}
+
 RUN = str(int(time.time()))[-6:]
 
 passed = failed = 0
-
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     global passed, failed
@@ -40,13 +40,11 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         failed += 1
         print(f"  FAIL  {name}  {detail}")
 
-
 def login(creds: dict) -> httpx.Client:
     c = httpx.Client(base_url=BASE, timeout=60)
     r = c.post("/api/auth/login", json=creds)
     assert r.status_code == 200, (creds["username"], r.status_code, r.text)
     return c
-
 
 def pick_contract(editor: httpx.Client) -> tuple[str, int]:
     """A completed contract the editor owns, plus one item id from section A."""
@@ -56,7 +54,6 @@ def pick_contract(editor: httpx.Client) -> tuple[str, int]:
         if items:
             return no, items[0]["id"]
     raise SystemExit("no completed contract with items found - run e2e_m2 first")
-
 
 def main() -> int:
     editor = login(EDITOR)
@@ -208,7 +205,6 @@ def main() -> int:
 
     print(f"\n=== RESULT: {passed} passed, {failed} failed ===")
     return 0 if failed == 0 else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

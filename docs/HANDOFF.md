@@ -84,6 +84,23 @@
 - 根目录的 `contract-review-app-handoff.zip` 是与基线同步的交付包（72 个文件，不含任何
   密钥与运行时数据）。代码有改动后需从本目录重新打包，保持 zip 与 git 一致。
 
+### 5c. 公开到 GitHub / 分享给外人（2026-11-22 脱敏后）
+
+本仓库已按"可公开"标准清理，**推送前仍需再跑一遍下面的检查**：
+
+- **凭据外置**：`backend/tests/creds.py` 统一从环境变量或本地 `.env` 读测试账号，
+  测试脚本里**不得出现明文密码**。本地要跑 e2e，先在 `.env` 填 `TEST_ADMIN_PASSWORD`
+  等（见 `.env.example`）；这些变量已被 git 忽略。
+- **外发检查命令**（推之前逐条跑，都应为空/clean）：
+  - `git status --short`（工作区干净）
+  - `git ls-files | grep -Ei '(\.env$|\.keystore$|\.apk$|\.pem$)'`（应无输出）
+  - `grep -rInE '"(password|api_key)": *"[^"<$]' backend/tests/`（应无输出，凭据必须来自 creds.py）
+  - `grep -rInE 'sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY' --exclude-dir=.git .`（应无输出）
+- **不要提交**：真实 `.env`、签名证书 `*.keystore`、APK、`data/`、`pgdata/`、任何
+  合同原件/报告 PDF、`*.dump`。这些按设计都在仓库之外。
+- **公网地址**：`frontend/android/assets/backend-url.txt` 里的公网 IP 是部署地址，
+  不是密钥；若分享给不希望连到本机服务的人，让对方在 App 里改地址即可。
+
 ## 6. 验收清单（接手后建议逐项跑）
 
 - [ ] `/api/health`：`api=up`、`database=up`、`worker=alive`、`llm_configured=true`

@@ -16,13 +16,14 @@ from pathlib import Path
 
 import httpx
 
+from creds import ADMIN, NEW_USER_PASSWORD
+
 BASE = "http://127.0.0.1:8790"
-ADMIN = {"username": "admin", "password": "Zhouxin1975"}
+
 RUN = str(int(time.time()))[-6:]
 PDF_DIR = Path("D:/xinxin/contract/_work/ops_test")
 
 passed = failed = 0
-
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     global passed, failed
@@ -32,7 +33,6 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     else:
         failed += 1
         print(f"  FAIL  {name}  {detail}")
-
 
 def make_pdf(path: Path, marker: str) -> Path:
     """Create a tiny real PDF so upload/parse have something valid."""
@@ -47,23 +47,20 @@ def make_pdf(path: Path, marker: str) -> Path:
     doc.close()
     return path
 
-
 def login(username: str, password: str) -> httpx.Client:
     c = httpx.Client(base_url=BASE, timeout=60)
     r = c.post("/api/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, (username, r.status_code, r.text)
     return c
 
-
 def make_user(admin: httpx.Client, name: str, role: str) -> httpx.Client:
     admin.post("/api/auth/register", json={
-        "username": name, "password": "TestOps2026", "display_name": name, "role": role})
+        "username": name, "password": NEW_USER_PASSWORD, "display_name": name, "role": role})
     pend = admin.get("/api/admin/pending-users").json()["users"]
     uid = next((u["uid"] for u in pend if u["username"] == name), None)
     assert uid, f"pending user {name} not found"
     admin.post(f"/api/admin/users/{uid}/approve", json={"role": role})
-    return login(name, "TestOps2026")
-
+    return login(name, NEW_USER_PASSWORD)
 
 def main() -> int:
     admin = login(ADMIN["username"], ADMIN["password"])
@@ -138,7 +135,6 @@ def main() -> int:
 
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1
-
 
 if __name__ == "__main__":
     sys.exit(main())

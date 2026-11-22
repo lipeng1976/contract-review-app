@@ -24,12 +24,11 @@ import time
 
 import httpx
 
+from creds import ADMIN, OWNER
+
 BASE = "http://127.0.0.1:8790"
-ADMIN = {"username": "admin", "password": "Zhouxin1975"}
-OWNER = {"username": "member.alpha", "password": "TestMember2026"}
 
 passed = failed = 0
-
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     global passed, failed
@@ -40,13 +39,11 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         failed += 1
         print(f"  FAIL  {name}  {detail}")
 
-
 def login(creds: dict) -> httpx.Client:
     c = httpx.Client(base_url=BASE, timeout=60)
     r = c.post("/api/auth/login", json=creds)
     assert r.status_code == 200, (creds["username"], r.status_code, r.text)
     return c
-
 
 def make_viewer(admin: httpx.Client) -> httpx.Client:
     """注册 + 审批一个只读账号（viewer 只有 contract.view / download）。"""
@@ -61,7 +58,6 @@ def make_viewer(admin: httpx.Client) -> httpx.Client:
     admin.post(f"/api/admin/users/{uid}/approve")
     c = login({"username": uname, "password": pw})
     return c
-
 
 def main() -> int:
     admin = login(ADMIN)
@@ -155,7 +151,6 @@ def main() -> int:
 
     print(f"\n{'ALL ' + str(passed) + ' CHECKS PASSED' if failed == 0 else str(failed) + ' FAILED'}")
     return 0 if failed == 0 else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

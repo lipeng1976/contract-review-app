@@ -13,12 +13,11 @@ import httpx
 sys.path.insert(0, ".")
 from app.db import server_conn  # noqa: E402
 
+from creds import ADMIN, MEMBER
+
 BASE = "http://127.0.0.1:8790"
-ADMIN = {"username": "admin", "password": "Zhouxin1975"}
-MEMBER = {"username": "member.alpha", "password": "TestMember2026"}
 
 ok = 0
-
 
 def check(label, cond, detail=""):
     global ok
@@ -27,14 +26,12 @@ def check(label, cond, detail=""):
     if not cond:
         raise SystemExit(1)
 
-
 def snapshot():
     with server_conn() as conn:
         r = conn.execute(
             """SELECT base_url,api_key,model,model_vision,timeout,max_tokens,enabled
                FROM llm_config WHERE id=1""").fetchone()
     return dict(zip(("base_url", "api_key", "model", "model_vision", "timeout", "max_tokens", "enabled"), r))
-
 
 def restore(cfg):
     with server_conn() as conn:
@@ -44,7 +41,6 @@ def restore(cfg):
             (cfg["base_url"], cfg["api_key"], cfg["model"], cfg["model_vision"],
              cfg["timeout"], cfg["max_tokens"], cfg["enabled"]))
     print(f"[INFO] real LLM config restored (key_len={len(cfg['api_key'])})")
-
 
 def main():
     original = snapshot()
@@ -94,7 +90,6 @@ def main():
         print(f"\nALL {ok} CHECKS PASSED")
     finally:
         restore(original)
-
 
 if __name__ == "__main__":
     main()

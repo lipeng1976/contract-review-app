@@ -9,10 +9,12 @@ from pathlib import Path
 
 import httpx
 
+from creds import ADMIN, MEMBER, NEW_USER_PASSWORD
+
 BASE = "http://127.0.0.1:8790"
-ADMIN = {"username": "admin", "password": "Zhouxin1975"}
+
 # General account names (NOT 11-digit phones) - proves overseas-style accounts work.
-MEMBER = {"username": "member.alpha", "password": "TestMember2026"}
+
 PDF = Path("D:/downloads/合同/36 Hinkler Road, Glen Waverley_contract.pdf")
 
 ok = 0
@@ -22,7 +24,6 @@ def check(label: str, cond: bool, detail: str = "") -> None:
     print(f"[{'PASS' if cond else 'FAIL'}] {label}" + (f" :: {detail}" if detail else ""))
     if not cond:
         raise SystemExit(1)
-
 
 def main() -> None:
     admin = httpx.Client(base_url=BASE, timeout=30)
@@ -108,17 +109,16 @@ def main() -> None:
     # Another APPROVED user must not see this PRIVATE contract
     other = httpx.Client(base_url=BASE, timeout=30)
     other_account = "other.beta"
-    r = other.post("/api/auth/register", json={"username": other_account, "password": "TestOther2026", "display_name": "其他用户"})
+    r = other.post("/api/auth/register", json={"username": other_account, "password": NEW_USER_PASSWORD, "display_name": "其他用户"})
     r = admin.get("/api/admin/pending-users")
     for u in r.json()["users"]:
         if u["username"] == other_account:
             admin.post(f"/api/admin/users/{u['uid']}/approve")
-    other.post("/api/auth/login", json={"username": other_account, "password": "TestOther2026"})
+    other.post("/api/auth/login", json={"username": other_account, "password": NEW_USER_PASSWORD})
     r = other.get(f"/api/contracts/{contract_no}")
     check("cross-user private contract hidden", r.status_code == 404, f"HTTP {r.status_code}")
 
     print(f"\nALL {ok} CHECKS PASSED")
-
 
 if __name__ == "__main__":
     main()
